@@ -29,17 +29,54 @@ export FUNCTIONAL_ANNOTATION="${FUNCTIONAL_ANNOTATION:-}"
 export GENES_OF_INTEREST_FILE="${GENES_OF_INTEREST_FILE:-}"
 
 # RNA-seq inputs.
-export RNA_METADATA_FILE="${RNA_METADATA_FILE:-${RNASEQ_RESULTS_DIR}/025-parse/030-metadata_final/AllProjects_metadata_new.csv}"
-export RNA_COUNTS_MATRIX="${RNA_COUNTS_MATRIX:-${RNASEQ_RESULTS_DIR}/050-quantification/counts_matrix.tsv}"
-export RNA_NORMALIZED_MATRIX="${RNA_NORMALIZED_MATRIX:-${RNASEQ_RESULTS_DIR}/050-quantification/tpm_matrix.tsv}"
-export RNA_DEG_RESULTS="${RNA_DEG_RESULTS:-${RNASEQ_RESULTS_DIR}/060-deg-analysis/DEGs_annotated_results.tsv}"
-export RNA_GENE_CATALOG="${RNA_GENE_CATALOG:-${RNASEQ_RESULTS_DIR}/090-search-gene/results/tables/gene_catalog.tsv}"
-export RNA_GENE_CATALOG_EXTRA="${RNA_GENE_CATALOG_EXTRA:-${RNASEQ_RESULTS_DIR}/../results/tables/gene_catalog.tsv}"
-export RNA_EXPRESSION_CONTEXT="${RNA_EXPRESSION_CONTEXT:-${RNASEQ_RESULTS_DIR}/090-search-gene/results/tables/expression_summary_by_context.tsv}"
-export RNA_WGCNA_HITS="${RNA_WGCNA_HITS:-${RNASEQ_RESULTS_DIR}/090-search-gene/results/tables/wgcna_hits.tsv}"
-export RNA_MFUZZ_HITS="${RNA_MFUZZ_HITS:-${RNASEQ_RESULTS_DIR}/090-search-gene/results/tables/mfuzz_hits.tsv}"
-export RNA_DTU_HITS="${RNA_DTU_HITS:-${RNASEQ_RESULTS_DIR}/090-search-gene/results/tables/dtu_hits.tsv}"
-export RNA_SPLICING_HITS="${RNA_SPLICING_HITS:-${RNASEQ_RESULTS_DIR}/090-search-gene/results/tables/splicing_hits.tsv}"
+first_existing_path() {
+  local candidate
+  for candidate in "$@"; do
+    if [[ -s "${candidate}" ]]; then
+      printf '%s\n' "${candidate}"
+      return 0
+    fi
+  done
+  printf '%s\n' "$1"
+}
+
+export RNA_METADATA_FILE="${RNA_METADATA_FILE:-$(first_existing_path \
+  "${RNASEQ_RESULTS_DIR}/025-parse/030-metadata_final/AllProjects_metadata_new.csv" \
+  "${RNASEQ_RESULTS_DIR}/025-parse/030-metadata_final/AllProjects_metadata.csv")}"
+export RNA_COUNTS_MATRIX="${RNA_COUNTS_MATRIX:-$(first_existing_path \
+  "${RNASEQ_RESULTS_DIR}/050-quantification/counts_matrix.tsv" \
+  "${RNASEQ_RESULTS_DIR}/050-quantification/counts_matrix.tsv.gz")}"
+export RNA_NORMALIZED_MATRIX="${RNA_NORMALIZED_MATRIX:-$(first_existing_path \
+  "${RNASEQ_RESULTS_DIR}/050-quantification/tpm_matrix.tsv" \
+  "${RNASEQ_RESULTS_DIR}/050-quantification/tpm_matrix.tsv.gz" \
+  "${RNASEQ_RESULTS_DIR}/050-quantification/star_cpm_matrix.tsv" \
+  "${RNASEQ_RESULTS_DIR}/050-quantification/star_cpm_matrix.tsv.gz")}"
+export RNA_DEG_RESULTS="${RNA_DEG_RESULTS:-$(first_existing_path \
+  "${RNASEQ_RESULTS_DIR}/060-deg-analysis/DEGs_annotated_results.tsv" \
+  "${RNASEQ_RESULTS_DIR}/060-deg-analysis/DEGs_annotated_results.tsv.gz" \
+  "${RNASEQ_RESULTS_DIR}/060-deg-analysis/DEGs_results.tsv" \
+  "${RNASEQ_RESULTS_DIR}/060-deg-analysis/DEGs_results.tsv.gz")}"
+export RNA_GENE_CATALOG="${RNA_GENE_CATALOG:-$(first_existing_path \
+  "${RNASEQ_RESULTS_DIR}/090-search-gene/results/tables/gene_catalog.tsv" \
+  "${RNASEQ_RESULTS_DIR}/090-search-gene/results/tables/gene_catalog.tsv.gz")}"
+export RNA_GENE_CATALOG_EXTRA="${RNA_GENE_CATALOG_EXTRA:-$(first_existing_path \
+  "${RNASEQ_RESULTS_DIR}/../results/tables/gene_catalog.tsv" \
+  "${RNASEQ_RESULTS_DIR}/../results/tables/gene_catalog.tsv.gz")}"
+export RNA_EXPRESSION_CONTEXT="${RNA_EXPRESSION_CONTEXT:-$(first_existing_path \
+  "${RNASEQ_RESULTS_DIR}/090-search-gene/results/tables/expression_summary_by_context.tsv" \
+  "${RNASEQ_RESULTS_DIR}/090-search-gene/results/tables/expression_summary_by_context.tsv.gz")}"
+export RNA_WGCNA_HITS="${RNA_WGCNA_HITS:-$(first_existing_path \
+  "${RNASEQ_RESULTS_DIR}/090-search-gene/results/tables/wgcna_hits.tsv" \
+  "${RNASEQ_RESULTS_DIR}/090-search-gene/results/tables/wgcna_hits.tsv.gz")}"
+export RNA_MFUZZ_HITS="${RNA_MFUZZ_HITS:-$(first_existing_path \
+  "${RNASEQ_RESULTS_DIR}/090-search-gene/results/tables/mfuzz_hits.tsv" \
+  "${RNASEQ_RESULTS_DIR}/090-search-gene/results/tables/mfuzz_hits.tsv.gz")}"
+export RNA_DTU_HITS="${RNA_DTU_HITS:-$(first_existing_path \
+  "${RNASEQ_RESULTS_DIR}/090-search-gene/results/tables/dtu_hits.tsv" \
+  "${RNASEQ_RESULTS_DIR}/090-search-gene/results/tables/dtu_hits.tsv.gz")}"
+export RNA_SPLICING_HITS="${RNA_SPLICING_HITS:-$(first_existing_path \
+  "${RNASEQ_RESULTS_DIR}/090-search-gene/results/tables/splicing_hits.tsv" \
+  "${RNASEQ_RESULTS_DIR}/090-search-gene/results/tables/splicing_hits.tsv.gz")}"
 
 # ChIP-seq inputs. Globs are allowed for peak tables/counts.
 if [[ -z "${CHIP_METADATA_FILE:-}" ]]; then

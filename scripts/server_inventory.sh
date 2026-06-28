@@ -36,9 +36,9 @@ find_many() {
 }
 
 echo "## RNA-seq inputs"
-printf 'RNA_COUNTS_MATRIX=%s\n' "$(find_first "$RNASEQ_RESULTS_DIR" -path '*/050-quantification/counts_matrix.tsv')"
-printf 'RNA_NORMALIZED_MATRIX=%s\n' "$(find_first "$RNASEQ_RESULTS_DIR" -path '*/050-quantification/tpm_matrix.tsv' -o -path '*/050-quantification/star_cpm_matrix.tsv')"
-printf 'RNA_DEG_RESULTS=%s\n' "$(find_first "$RNASEQ_RESULTS_DIR" -path '*/060-deg-analysis/DEGs_annotated_results.tsv' -o -path '*/060-deg-analysis/DEGs_results.tsv')"
+printf 'RNA_COUNTS_MATRIX=%s\n' "$(find_first "$RNASEQ_RESULTS_DIR" -path '*/050-quantification/counts_matrix.tsv' -o -path '*/050-quantification/counts_matrix.tsv.gz')"
+printf 'RNA_NORMALIZED_MATRIX=%s\n' "$(find_first "$RNASEQ_RESULTS_DIR" -path '*/050-quantification/tpm_matrix.tsv' -o -path '*/050-quantification/tpm_matrix.tsv.gz' -o -path '*/050-quantification/star_cpm_matrix.tsv' -o -path '*/050-quantification/star_cpm_matrix.tsv.gz')"
+printf 'RNA_DEG_RESULTS=%s\n' "$(find_first "$RNASEQ_RESULTS_DIR" -path '*/060-deg-analysis/DEGs_annotated_results.tsv' -o -path '*/060-deg-analysis/DEGs_annotated_results.tsv.gz' -o -path '*/060-deg-analysis/DEGs_results.tsv' -o -path '*/060-deg-analysis/DEGs_results.tsv.gz')"
 printf 'RNA_METADATA_FILE=%s\n' "$(find_first "$RNASEQ_RESULTS_DIR" -path '*/025-parse/030-metadata_final/AllProjects_metadata_new.csv' -o -path '*/025-parse/030-metadata_final/AllProjects_metadata.csv')"
 printf 'RNA_GENE_CATALOG=%s\n' "$(find_first "$RNASEQ_RESULTS_DIR" -path '*/090-search-gene/results/tables/gene_catalog.tsv' -o -path '*/090-search-gene/results/tables/gene_catalog.tsv.gz')"
 
