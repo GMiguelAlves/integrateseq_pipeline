@@ -5,14 +5,10 @@ tables. It links gene expression, differential expression, ChIP peak
 annotations, differential binding, functional annotations, candidate scoring,
 visualizations, and a final HTML/Markdown report.
 
-The pipeline was scaffolded to be compatible with the local models inspected at:
-
-- `C:/Users/dilci/Desktop/schtopipe/rnaseq_smansoni-main`
-- `C:/Users/dilci/Documents/chipseq_smansoni`
-
-Those defaults are only examples. Any organism can be used when the required
+The pipeline is organism agnostic. Any organism can be used when the required
 tabular inputs and optional annotation files are supplied in
-`config/pipeline_config.sh` or `config/pipeline_config.local.sh`.
+`config/pipeline_config.sh`, `config/pipeline_config.local.sh`, or the job
+environment.
 
 ## Directory layout
 
@@ -57,7 +53,7 @@ The local Windows working copy may contain only code and metadata drafts, not
 the large generated ChIP outputs. Use:
 
 ```bash
-bash scripts/server_inventory.sh /server/path/rnaseq_smansoni-main /server/path/chipseq_smansoni /server/path/chipseq_work
+bash scripts/server_inventory.sh /server/path/rnaseq_results /server/path/chipseq_results /server/path/chipseq_work
 ```
 
 Then copy `config/pipeline_config.server.template.sh` to

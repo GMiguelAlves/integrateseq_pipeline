@@ -16,10 +16,10 @@ if [[ -f "${LOCAL_CONFIG}" ]]; then
   source "${LOCAL_CONFIG}"
 fi
 
-# Source pipeline result directories. Defaults match the local models inspected
-# while scaffolding this integration pipeline.
-export RNASEQ_RESULTS_DIR="${RNASEQ_RESULTS_DIR:-C:/Users/dilci/Desktop/schtopipe/rnaseq_smansoni-main}"
-export CHIPSEQ_RESULTS_DIR="${CHIPSEQ_RESULTS_DIR:-C:/Users/dilci/Documents/chipseq_smansoni}"
+# Source pipeline result directories. Override these in
+# config/pipeline_config.local.sh or in the job environment.
+export RNASEQ_RESULTS_DIR="${RNASEQ_RESULTS_DIR:-${PROJECT_DIR}/external/rnaseq_results}"
+export CHIPSEQ_RESULTS_DIR="${CHIPSEQ_RESULTS_DIR:-${PROJECT_DIR}/external/chipseq_results}"
 export INTEGRATION_OUTPUT_DIR="${INTEGRATION_OUTPUT_DIR:-${PROJECT_DIR}}"
 
 # Organism-dependent files. Leave blank when unavailable.

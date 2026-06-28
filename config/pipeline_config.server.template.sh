@@ -3,8 +3,8 @@
 # These paths must point to the server-side results, not to the local Windows
 # working copies that only contain code/templates.
 
-export RNASEQ_RESULTS_DIR="/path/on/server/rnaseq_smansoni-main"
-export CHIPSEQ_RESULTS_DIR="/path/on/server/chipseq_smansoni"
+export RNASEQ_RESULTS_DIR="/path/on/server/rnaseq_results"
+export CHIPSEQ_RESULTS_DIR="/path/on/server/chipseq_results"
 
 # If the ChIP-seq pipeline uses WORK_ROOT outside the repository, point these
 # directly to the heavy output directories.

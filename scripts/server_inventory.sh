@@ -9,8 +9,8 @@ Run this on the server where the RNA-seq and ChIP-seq outputs exist. The script
 prints the exact files the integration pipeline can consume.
 
 Examples:
-  bash scripts/server_inventory.sh /scratch/me/rnaseq_smansoni-main /scratch/me/chipseq_smansoni
-  bash scripts/server_inventory.sh /scratch/me/rnaseq_smansoni-main /home/me/chipseq_smansoni /scratch/me/chipseq_work
+  bash scripts/server_inventory.sh /scratch/me/rnaseq_results /scratch/me/chipseq_results
+  bash scripts/server_inventory.sh /scratch/me/rnaseq_results /home/me/chipseq_results /scratch/me/chipseq_work
 USAGE
 }
 
