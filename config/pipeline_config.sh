@@ -55,7 +55,15 @@ export RNA_DEG_RESULTS="${RNA_DEG_RESULTS:-$(first_existing_path \
   "${RNASEQ_RESULTS_DIR}/060-deg-analysis/DEGs_annotated_results.tsv" \
   "${RNASEQ_RESULTS_DIR}/060-deg-analysis/DEGs_annotated_results.tsv.gz" \
   "${RNASEQ_RESULTS_DIR}/060-deg-analysis/DEGs_results.tsv" \
-  "${RNASEQ_RESULTS_DIR}/060-deg-analysis/DEGs_results.tsv.gz")}"
+  "${RNASEQ_RESULTS_DIR}/060-deg-analysis/DEGs_results.tsv.gz" \
+  "${RNASEQ_RESULTS_DIR}/060-deg-analysis/all_projects/batch_corrected/DEGs_all_results.tsv" \
+  "${RNASEQ_RESULTS_DIR}/060-deg-analysis/all_projects/batch_corrected/DEGs_all_results.tsv.gz" \
+  "${RNASEQ_RESULTS_DIR}/060-deg-analysis/all_projects/raw/DEGs_all_results.tsv" \
+  "${RNASEQ_RESULTS_DIR}/060-deg-analysis/all_projects/raw/DEGs_all_results.tsv.gz" \
+  "${RNASEQ_RESULTS_DIR}/060-deg-analysis/all_projects/batch_corrected/DEGs_significant.tsv" \
+  "${RNASEQ_RESULTS_DIR}/060-deg-analysis/all_projects/batch_corrected/DEGs_significant.tsv.gz" \
+  "${RNASEQ_RESULTS_DIR}/060-deg-analysis/all_projects/raw/DEGs_significant.tsv" \
+  "${RNASEQ_RESULTS_DIR}/060-deg-analysis/all_projects/raw/DEGs_significant.tsv.gz")}"
 export RNA_GENE_CATALOG="${RNA_GENE_CATALOG:-$(first_existing_path \
   "${RNASEQ_RESULTS_DIR}/090-search-gene/results/tables/gene_catalog.tsv" \
   "${RNASEQ_RESULTS_DIR}/090-search-gene/results/tables/gene_catalog.tsv.gz")}"
