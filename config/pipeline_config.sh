@@ -84,7 +84,6 @@ export RUN_MODE="${RUN_MODE:-slurm}"       # slurm or local
 export THREADS="${THREADS:-8}"
 export MEMORY="${MEMORY:-32G}"
 export SLURM_TIME="${SLURM_TIME:-12:00:00}"
-export SLURM_PARTITION="${SLURM_PARTITION:-compute}"
 export SLURM_ACCOUNT="${SLURM_ACCOUNT:-}"
 export PYTHON_BIN="${PYTHON_BIN:-python3}"
 export RSCRIPT_BIN="${RSCRIPT_BIN:-Rscript}"

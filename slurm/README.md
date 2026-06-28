@@ -6,7 +6,6 @@ Runtime values are configured in `config/pipeline_config.sh`:
 - `THREADS`
 - `MEMORY`
 - `SLURM_TIME`
-- `SLURM_PARTITION`
 - `SLURM_ACCOUNT`
 - `ENV_BACKEND`
 - `CONDA_ENV`

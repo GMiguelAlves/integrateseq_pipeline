@@ -232,7 +232,6 @@ submit_step() {
     --cpus-per-task="${THREADS}"
     --mem="${MEMORY}"
     --time="${SLURM_TIME}"
-    --partition="${SLURM_PARTITION}"
     --output="${log_dir}/${step}.out"
     --error="${log_dir}/${step}.err"
   )
