@@ -113,6 +113,9 @@ def safe_id(value: str) -> str:
 
 
 STAGE_ALIASES = {
+    "all": "all_stages",
+    "allstage": "all_stages",
+    "allstages": "all_stages",
     "adult": "adult",
     "adults": "adult",
     "cercaria": "cercariae",
@@ -123,6 +126,7 @@ STAGE_ALIASES = {
     "schistosomula": "schistosomula",
     "sporocyst": "sporocysts",
     "sporocysts": "sporocysts",
+    "pooled": "all_stages",
 }
 _KNOWN_MARKS_CACHE: list[str] | None = None
 

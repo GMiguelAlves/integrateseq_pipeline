@@ -194,6 +194,9 @@ coordinates, relative position to the TSS when available, and RNA evidence.
 DTU, splicing, epigenetic machinery class, and functional annotation fields.
 `stage_mark_comparison.tsv` summarizes those links by life-cycle stage and
 epigenetic mark.
+Peak files whose names indicate pooled/global calls, such as `all`, are labeled
+as `all_stages`; truly unresolved ChIP labels remain `unknown_ChIP` or
+`unknown`.
 
 ## Troubleshooting
 

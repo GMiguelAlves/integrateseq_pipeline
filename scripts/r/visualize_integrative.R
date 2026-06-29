@@ -33,14 +33,20 @@ read_tsv <- function(path) {
   }
   con <- if (grepl("\\.gz$", path)) gzfile(path, "rt") else file(path, "rt")
   on.exit(close(con), add = TRUE)
-  read.delim(
-    con,
-    sep = "\t",
-    header = TRUE,
-    quote = "",
-    comment.char = "",
-    check.names = FALSE,
-    stringsAsFactors = FALSE
+  tryCatch(
+    read.delim(
+      con,
+      sep = "\t",
+      header = TRUE,
+      quote = "",
+      comment.char = "",
+      check.names = FALSE,
+      stringsAsFactors = FALSE
+    ),
+    error = function(e) {
+      warning(sprintf("Could not read %s: %s", path, e$message))
+      data.frame(stringsAsFactors = FALSE)
+    }
   )
 }
 
@@ -104,7 +110,8 @@ theme_integrative <- function(base_size = 11) {
       axis.title = element_text(color = "#374151"),
       axis.text = element_text(color = "#374151"),
       strip.text = element_text(face = "bold", color = "#111827"),
-      legend.position = "bottom"
+      legend.position = "bottom",
+      plot.margin = margin(10, 18, 10, 10)
     )
 }
 
@@ -224,7 +231,7 @@ if (nrow(stage_mark_comparison) > 0 && all(c("mark_or_factor", "stage_or_conditi
     scale_fill_gradient(low = "#ecfeff", high = "#0f766e") +
     labs(
       title = "Integrated evidence by stage and mark",
-      subtitle = "Counts combine DE-linked genes, epigenetic machinery, WGCNA, Mfuzz, DTU, and splicing evidence.",
+      subtitle = "DE-linked genes + machinery + WGCNA/Mfuzz/DTU/splicing hits.",
       x = "Stage or condition",
       y = "Mark or factor",
       fill = "Evidence"
@@ -234,71 +241,91 @@ if (nrow(stage_mark_comparison) > 0 && all(c("mark_or_factor", "stage_or_conditi
 } else {
   p <- empty_plot("Integrated evidence by stage and mark", "Run scoring to populate stage-mark comparisons.")
 }
-save_plot(p, "stage_mark_integrated_evidence", 8.5, 6)
+save_plot(p, "stage_mark_integrated_evidence", 10.5, 6.2)
 
 if (nrow(gene_mark_links) > 0) {
   links <- gene_mark_links
+  links$gene_id <- safe_col(links, "gene_id", "")
   links$mark_or_factor <- safe_col(links, "mark_or_factor", "unknown")
   links$stage_or_condition <- safe_col(links, "stage_or_condition", "unknown")
   links$promoter_flag <- safe_col(links, "promoter_flag", "false")
+  links$peak_location <- safe_col(links, "peak_location", "")
   links$peak_chrom <- safe_col(links, "peak_chrom", "")
   links$peak_start <- as_num(safe_col(links, "peak_start", NA))
   links$peak_end <- as_num(safe_col(links, "peak_end", NA))
   links$peak_midpoint <- as_num(safe_col(links, "peak_midpoint", NA))
   links$distance_to_tss <- as_num(safe_col(links, "distance_to_tss", NA))
+  if (any(!(links$stage_or_condition %in% c("unknown", "all_stages")))) {
+    links <- links[!(links$stage_or_condition %in% c("unknown", "all_stages")), , drop = FALSE]
+  }
   links$gene_label <- ifelse(
     safe_col(links, "gene_name") != "" & safe_col(links, "gene_name") != safe_col(links, "gene_id"),
     paste0(safe_col(links, "gene_name"), " (", safe_col(links, "gene_id"), ")"),
     safe_col(links, "gene_id")
   )
   links$gene_label <- trim_label(links$gene_label, 38)
-  gene_counts <- sort(table(links$gene_label), decreasing = TRUE)
-  keep_genes <- names(head(gene_counts, 25))
-  links <- links[links$gene_label %in% keep_genes, , drop = FALSE]
-  links$gene_label <- factor(links$gene_label, levels = rev(keep_genes))
-  links$peak_width <- pmax(1, links$peak_end - links$peak_start)
 
-  has_distance <- any(!is.na(links$distance_to_tss))
-  if (has_distance) {
-    plot_df <- links[!is.na(links$distance_to_tss), , drop = FALSE]
-    p <- ggplot(plot_df, aes(x = distance_to_tss, y = gene_label, color = mark_or_factor)) +
-      geom_vline(xintercept = 0, color = "#374151", linewidth = 0.4) +
-      geom_point(aes(shape = promoter_flag, size = peak_width), alpha = 0.82) +
-      facet_wrap(~stage_or_condition, scales = "free_x") +
+  keep_ids <- character()
+  if (nrow(candidate_scores) > 0 && all(c("gene_id", "candidate_score") %in% names(candidate_scores))) {
+    candidate_scores$candidate_score <- as_num(candidate_scores$candidate_score)
+    ranked_ids <- candidate_scores$gene_id[order(-candidate_scores$candidate_score)]
+    keep_ids <- ranked_ids[ranked_ids %in% unique(links$gene_id)]
+  }
+  if (length(keep_ids) == 0) {
+    gene_counts <- sort(table(links$gene_id), decreasing = TRUE)
+    keep_ids <- names(gene_counts)
+  }
+  keep_ids <- head(keep_ids, 14)
+  links <- links[links$gene_id %in% keep_ids, , drop = FALSE]
+
+  label_by_gene <- links[!duplicated(links$gene_id), c("gene_id", "gene_label"), drop = FALSE]
+  ordered_labels <- label_by_gene$gene_label[match(keep_ids, label_by_gene$gene_id)]
+  ordered_labels <- ordered_labels[!is.na(ordered_labels)]
+  links$gene_label <- factor(links$gene_label, levels = rev(ordered_labels))
+
+  loc <- tolower(links$peak_location)
+  links$position_class <- ifelse(
+    grepl("promoter|tss", loc) | links$promoter_flag == "true",
+    "promoter/TSS",
+    ifelse(
+      grepl("exon|intron|gene_body|gene body|genic", loc),
+      "gene body",
+      ifelse(grepl("distal|intergenic|upstream|downstream", loc), "distal/intergenic", "other/annotated")
+    )
+  )
+  links$position_class <- factor(links$position_class, levels = c("promoter/TSS", "gene body", "distal/intergenic", "other/annotated"))
+  stage_order <- c("adult", "cercariae", "miracidia", "schistosomula", "sporocysts", "all_stages", "unknown")
+  links$stage_or_condition <- factor(links$stage_or_condition, levels = unique(c(stage_order, links$stage_or_condition)))
+  plot_df <- aggregate(
+    peak_id ~ gene_label + stage_or_condition + mark_or_factor + position_class + promoter_flag,
+    links,
+    length
+  )
+  names(plot_df)[names(plot_df) == "peak_id"] <- "n_peaks"
+
+  if (nrow(plot_df) > 0) {
+    p <- ggplot(plot_df, aes(x = position_class, y = gene_label, color = mark_or_factor)) +
+      geom_point(aes(size = n_peaks, shape = promoter_flag), alpha = 0.86, position = position_jitter(width = 0.08, height = 0.08)) +
+      facet_wrap(~stage_or_condition, nrow = 1) +
       scale_color_manual(values = rep(palette_marks, length.out = length(unique(plot_df$mark_or_factor)))) +
-      scale_size_continuous(range = c(1.8, 5.5), guide = "none") +
+      scale_size_continuous(range = c(2, 7), breaks = c(1, 5, 20, 100), name = "Peaks") +
       labs(
         title = "Gene-position-mark associations",
-        subtitle = "Each point is a ChIP peak linked to a gene; x = peak distance to TSS.",
-        x = "Peak distance to TSS (bp)",
+        subtitle = "Top candidate genes; x = peak position class, color = epigenetic mark.",
+        x = "Peak position class",
         y = "Gene",
         color = "Mark",
         shape = "Promoter"
       ) +
-      theme_integrative()
-  } else if (any(!is.na(links$peak_start)) && any(!is.na(links$peak_end))) {
-    plot_df <- links[!is.na(links$peak_start) & !is.na(links$peak_end), , drop = FALSE]
-    p <- ggplot(plot_df, aes(y = gene_label, color = mark_or_factor)) +
-      geom_segment(aes(x = peak_start, xend = peak_end, yend = gene_label), linewidth = 2.4, alpha = 0.8) +
-      geom_point(aes(x = peak_midpoint, shape = promoter_flag), size = 2.3) +
-      facet_grid(peak_chrom ~ stage_or_condition, scales = "free_x", space = "free_x") +
-      scale_color_manual(values = rep(palette_marks, length.out = length(unique(plot_df$mark_or_factor)))) +
-      labs(
-        title = "Gene-position-mark associations",
-        subtitle = "Segments show peak genomic intervals linked to each gene.",
-        x = "Peak genomic coordinate (bp)",
-        y = "Gene",
-        color = "Mark",
-        shape = "Promoter"
-      ) +
-      theme_integrative()
+      theme_integrative() +
+      theme(axis.text.x = element_text(angle = 30, hjust = 1))
   } else {
-    p <- empty_plot("Gene-position-mark associations", "The link table exists, but peak positions are missing.")
+    p <- empty_plot("Gene-position-mark associations", "The link table exists, but no top candidate links were available.")
   }
 } else {
   p <- empty_plot("Gene-position-mark associations", "Run integration after peak-gene mapping to populate this figure.")
 }
-save_plot(p, "gene_position_mark_map", 10.5, 7.2)
+save_plot(p, "gene_position_mark_map", 12, 6.8)
 
 workflow <- data.frame(
   xmin = c(0.05, 0.05, 0.38, 0.72),
