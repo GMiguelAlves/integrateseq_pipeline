@@ -133,7 +133,12 @@ export SLURM_ACCOUNT="${SLURM_ACCOUNT:-}"
 export PYTHON_BIN="${PYTHON_BIN:-python3}"
 export RSCRIPT_BIN="${RSCRIPT_BIN:-Rscript}"
 export ENV_BACKEND="${ENV_BACKEND:-none}"  # none, conda, apptainer, singularity
-export CONDA_ENV="${CONDA_ENV:-integrateseq}"
+export CONDA_BASE="${CONDA_BASE:-}"
+export RNA_TOOLS_ENV="${RNA_TOOLS_ENV:-rna-tools}"
+export PYTHON_ENV="${PYTHON_ENV:-python-list}"
+export R_ANALYSIS_ENV="${R_ANALYSIS_ENV:-r-analysis}"
+export CONDA_ENV="${CONDA_ENV:-${PYTHON_ENV}}"
+export VISUALIZATION_CONDA_ENV="${VISUALIZATION_CONDA_ENV:-${PYTHON_ENV}}"
 export CONTAINER_IMAGE="${CONTAINER_IMAGE:-}"
 
 # Safety.

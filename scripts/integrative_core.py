@@ -1103,8 +1103,107 @@ def command_visualize(_args: argparse.Namespace) -> None:
     _h, mark_stage = read_table(str(outdir("060-chipseq-summary") / "chip_mark_stage_metadata.tsv"))
     _h, gene_mark = read_table(str(outdir("070-integrated-tables") / "gene_mark_stage_summary.tsv"))
     _h, epi_catalog = read_table(str(outdir("030-id-harmonization") / "epigenetic_machinery_catalog.tsv"))
-    _h, figure_manifest = read_table(str(outdir("090-visualizations") / "visualization_manifest.tsv"))
     manifest = []
+
+    def svg_text(x: float, y: float, text: object, size: int = 12, anchor: str = "start", weight: str = "400") -> str:
+        return (
+            f"<text x='{x}' y='{y}' font-size='{size}' font-family='Arial, Helvetica, sans-serif' "
+            f"text-anchor='{anchor}' font-weight='{weight}' fill='#111827'>{html.escape(str(text))}</text>"
+        )
+
+    def write_svg(name: str, width: int, height: int, body: str) -> None:
+        svg = (
+            f"<svg xmlns='http://www.w3.org/2000/svg' width='{width}' height='{height}' viewBox='0 0 {width} {height}'>"
+            "<rect width='100%' height='100%' fill='#ffffff'/>"
+            f"{body}</svg>\n"
+        )
+        write_text(vis_dir / f"{name}.svg", svg)
+        manifest.append({"figure": f"{name}.svg", "status": "created"})
+
+    def fallback_barh(name: str, title: str, rows: list[tuple[str, float]], color: str = "#2563eb") -> None:
+        rows = rows[:30] or [("no_data", 0)]
+        width = 900
+        height = max(260, 70 + len(rows) * 24)
+        left = 220
+        max_value = max([v for _label, v in rows] or [1]) or 1
+        parts = [svg_text(width / 2, 32, title, 18, "middle", "700")]
+        for i, (label, value) in enumerate(rows):
+            y = 60 + i * 24
+            bar_width = int((width - left - 80) * (value / max_value))
+            parts.append(svg_text(12, y + 14, label[:34], 11))
+            parts.append(f"<rect x='{left}' y='{y}' width='{bar_width}' height='16' fill='{color}' rx='2'/>")
+            parts.append(svg_text(left + bar_width + 8, y + 13, f"{value:g}", 11))
+        write_svg(name, width, height, "".join(parts))
+
+    def fallback_matrix(name: str, title: str, rows: list[str], cols: list[str], values: list[list[int]], empty_message: str) -> None:
+        width = max(720, 180 + len(cols) * 120)
+        height = max(280, 95 + len(rows) * 38)
+        parts = [svg_text(width / 2, 32, title, 18, "middle", "700")]
+        if not rows or not cols:
+            parts.append(svg_text(width / 2, height / 2, empty_message, 16, "middle", "700"))
+            write_svg(name, width, height, "".join(parts))
+            return
+        max_value = max([max(row) for row in values] or [1]) or 1
+        left = 170
+        top = 72
+        cell_w = 105
+        cell_h = 30
+        for j, col in enumerate(cols):
+            parts.append(svg_text(left + j * cell_w + cell_w / 2, top - 12, col, 10, "middle", "700"))
+        for i, row_label in enumerate(rows):
+            y = top + i * cell_h
+            parts.append(svg_text(12, y + 20, row_label, 10))
+            for j, _col in enumerate(cols):
+                value = values[i][j]
+                alpha = 0.15 + 0.75 * (value / max_value)
+                x = left + j * cell_w
+                parts.append(f"<rect x='{x}' y='{y}' width='{cell_w - 4}' height='{cell_h - 4}' fill='#0891b2' fill-opacity='{alpha:.3f}'/>")
+                parts.append(svg_text(x + cell_w / 2 - 2, y + 18, value, 11, "middle", "700"))
+        write_svg(name, width, height, "".join(parts))
+
+    def generate_fallback_svgs(reason: Exception) -> None:
+        write_text(vis_dir / "visualization_warning.txt", f"Matplotlib unavailable; generated SVG fallback figures. Reason: {reason}\n")
+        class_rows = [(r.get("integrative_class", "unknown"), float(as_int(r.get("n_genes", "0")))) for r in classes]
+        fallback_barh("barplot_integrative_classes", "Integrative classes", class_rows, "#2563eb")
+        top_rows = [(r.get("gene_id", ""), as_float(r.get("candidate_score"))) for r in scores[:30]]
+        fallback_barh("top_candidate_scores", "Top candidate genes", top_rows, "#16a34a")
+        group_counts = Counter(r.get("machinery_group", "unknown") for r in epi_catalog)
+        fallback_barh("epigenetic_catalog_groups", "Epigenetic machinery catalog", [(k, float(v)) for k, v in group_counts.items()], "#0f766e")
+        marks = sorted({r.get("mark_or_factor", "unknown") for r in mark_stage})
+        stages = sorted({r.get("stage_or_condition", "unknown") for r in mark_stage})
+        mark_idx = {m: i for i, m in enumerate(marks)}
+        stage_idx = {s: i for i, s in enumerate(stages)}
+        matrix = [[0 for _ in stages] for _ in marks]
+        for row in mark_stage:
+            if row.get("mark_or_factor") in mark_idx and row.get("stage_or_condition") in stage_idx:
+                matrix[mark_idx[row["mark_or_factor"]]][stage_idx[row["stage_or_condition"]]] = as_int(row.get("n_samples", "0"))
+        fallback_matrix("chip_mark_stage_matrix", "ChIP-seq marks by life-cycle stage", marks, stages, matrix, "No ChIP metadata available")
+        relation_counts = Counter((r.get("mark_or_factor", "unknown"), r.get("stage_or_condition", "unknown")) for r in gene_mark)
+        rel_marks = sorted({m for m, _s in relation_counts})
+        rel_stages = sorted({s for _m, s in relation_counts})
+        rel_matrix = [[relation_counts[(m, s)] for s in rel_stages] for m in rel_marks]
+        fallback_matrix("gene_mark_stage_matrix", "Gene-mark-stage links", rel_marks, rel_stages, rel_matrix, "No gene-mark-stage links yet")
+        workflow = (
+            svg_text(450, 34, "Integrative analysis workflow", 18, "middle", "700")
+            + "<rect x='45' y='80' width='180' height='70' rx='8' fill='#dbeafe' stroke='#334155'/>"
+            + "<rect x='45' y='210' width='180' height='70' rx='8' fill='#dcfce7' stroke='#334155'/>"
+            + "<rect x='360' y='145' width='190' height='80' rx='8' fill='#fef3c7' stroke='#334155'/>"
+            + "<rect x='680' y='145' width='180' height='80' rx='8' fill='#ede9fe' stroke='#334155'/>"
+            + svg_text(135, 110, "RNA-seq", 15, "middle", "700")
+            + svg_text(135, 132, "expression + DEG", 11, "middle")
+            + svg_text(135, 240, "ChIP-seq", 15, "middle", "700")
+            + svg_text(135, 262, "marks + peaks", 11, "middle")
+            + svg_text(455, 176, "Integration", 15, "middle", "700")
+            + svg_text(455, 199, "gene x mark x stage", 11, "middle")
+            + svg_text(770, 176, "Outputs", 15, "middle", "700")
+            + svg_text(770, 199, "HTML + figures", 11, "middle")
+            + "<path d='M225 115 L360 175' stroke='#334155' stroke-width='2' marker-end='url(#arrow)'/>"
+            + "<path d='M225 245 L360 195' stroke='#334155' stroke-width='2' marker-end='url(#arrow)'/>"
+            + "<path d='M550 185 L680 185' stroke='#334155' stroke-width='2' marker-end='url(#arrow)'/>"
+            + "<defs><marker id='arrow' markerWidth='10' markerHeight='10' refX='9' refY='3' orient='auto' markerUnits='strokeWidth'><path d='M0,0 L0,6 L9,3 z' fill='#334155'/></marker></defs>"
+        )
+        write_svg("integrative_workflow_overview", 900, 330, workflow)
+
     try:
         import matplotlib
 
@@ -1221,8 +1320,7 @@ def command_visualize(_args: argparse.Namespace) -> None:
         ax.set_title("Integrative analysis workflow", fontsize=15, fontweight="bold")
         save_all(fig, "integrative_workflow_overview")
     except Exception as exc:  # pragma: no cover - depends on local plotting stack
-        manifest.append({"figure": "matplotlib", "status": f"not_created: {exc}"})
-        write_text(vis_dir / "visualization_warning.txt", f"Matplotlib figures were not created: {exc}\n")
+        generate_fallback_svgs(exc)
     write_table(vis_dir / "visualization_manifest.tsv", manifest, ["figure", "status"])
 
 
@@ -1348,16 +1446,23 @@ def command_report(_args: argparse.Namespace) -> None:
         more = f"<p class='muted'>Showing {min(limit, len(rows))} of {len(rows)} rows.</p>" if len(rows) > limit else ""
         return f"<div class='table-wrap'><table><thead><tr>{head}</tr></thead><tbody>{''.join(body)}</tbody></table></div>{more}"
 
-    png_figures = []
+    display_figures = []
     seen_figures = set()
+    preferred = {}
     for row in figure_manifest:
         fig = row.get("figure", "")
-        if fig.endswith(".png") and fig not in seen_figures:
+        stem = str(Path(fig).with_suffix("")) if fig else ""
+        if not stem:
+            continue
+        if fig.endswith(".png") or (fig.endswith(".svg") and stem not in preferred):
+            preferred[stem] = fig
+    for fig in preferred.values():
+        if fig not in seen_figures:
             seen_figures.add(fig)
-            png_figures.append(fig)
+            display_figures.append(fig)
     figure_cards = "".join(
         f"<figure><img src='../090-visualizations/{html.escape(fig)}' alt='{html.escape(fig)}'><figcaption>{html.escape(Path(fig).stem.replace('_', ' '))}</figcaption></figure>"
-        for fig in png_figures
+        for fig in display_figures
     )
     if not figure_cards:
         figure_cards = "<p class='muted'>Run the visualize step to populate figure panels.</p>"
