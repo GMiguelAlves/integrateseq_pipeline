@@ -179,13 +179,21 @@ Key outputs are:
 - `070-integrated-tables/gene_mark_stage_links.tsv`
 - `080-candidate-scoring/candidate_gene_scores.tsv`
 - `080-candidate-scoring/top_candidates.tsv`
+- `080-candidate-scoring/ranked_gene_mark_stage_evidence.tsv`
+- `080-candidate-scoring/stage_mark_comparison.tsv`
+- `080-candidate-scoring/candidate_regulators.tsv`
 - `090-visualizations/gene_position_mark_map.png`
+- `090-visualizations/stage_mark_integrated_evidence.png`
 - `090-visualizations/visualization_manifest.tsv`
 - `110-reports/integrative_report.html`
 
 `gene_mark_stage_links.tsv` is the main association table for the biological
 question. It links each gene to mark/factor, stage/condition, peak ID, peak
 coordinates, relative position to the TSS when available, and RNA evidence.
+`ranked_gene_mark_stage_evidence.tsv` adds the candidate score, WGCNA, Mfuzz,
+DTU, splicing, epigenetic machinery class, and functional annotation fields.
+`stage_mark_comparison.tsv` summarizes those links by life-cycle stage and
+epigenetic mark.
 
 ## Troubleshooting
 

@@ -112,10 +112,109 @@ def safe_id(value: str) -> str:
     return re.sub(r"[^A-Za-z0-9_.-]+", "_", value.strip()) or "unknown"
 
 
+STAGE_ALIASES = {
+    "adult": "adult",
+    "adults": "adult",
+    "cercaria": "cercariae",
+    "cercariae": "cercariae",
+    "miracidium": "miracidia",
+    "miracidia": "miracidia",
+    "schistosomulum": "schistosomula",
+    "schistosomula": "schistosomula",
+    "sporocyst": "sporocysts",
+    "sporocysts": "sporocysts",
+}
+_KNOWN_MARKS_CACHE: list[str] | None = None
+
+
 def glob_existing(pattern: str) -> list[str]:
     if not pattern:
         return []
     return sorted(p for p in glob.glob(norm_path(pattern)) if path_exists(p))
+
+
+def source_label(path: str) -> str:
+    label = re.split(r"[\\/]", str(path))[-1]
+    for suffix in [".gz", ".tsv", ".csv", ".txt", ".bed", ".narrowPeak", ".broadPeak"]:
+        if label.endswith(suffix):
+            label = label[: -len(suffix)]
+    for suffix in [".annotated", ".consensus", ".counts"]:
+        label = label.replace(suffix, "")
+    return label
+
+
+def canonical_stage(value: str) -> str:
+    text = str(value or "").strip()
+    if not text:
+        return ""
+    lowered = re.sub(r"[^a-z0-9]+", " ", text.lower())
+    for token in lowered.split():
+        if token in STAGE_ALIASES:
+            return STAGE_ALIASES[token]
+    return ""
+
+
+def known_marks() -> list[str]:
+    global _KNOWN_MARKS_CACHE
+    if _KNOWN_MARKS_CACHE is not None:
+        return _KNOWN_MARKS_CACHE
+    marks = ["H3K27ac", "H3K4me3", "H3K27me3", "H3K9me3", "H3K9ac", "ATAC", "unknown_ChIP"]
+    marks.extend(load_mark_config().keys() if "load_mark_config" in globals() else [])
+    _KNOWN_MARKS_CACHE = sorted({m for m in marks if m and m != "unknown"}, key=len, reverse=True)
+    return _KNOWN_MARKS_CACHE
+
+
+def canonical_mark(value: str) -> str:
+    text = str(value or "").strip()
+    if not text:
+        return ""
+    for mark in known_marks():
+        if re.search(rf"(^|[^A-Za-z0-9]){re.escape(mark)}([^A-Za-z0-9]|$)", text, flags=re.IGNORECASE):
+            return mark
+    match = re.search(r"H[234]K[0-9]+(?:me[0-3]|ac)", text, flags=re.IGNORECASE)
+    if match:
+        raw = match.group(0)
+        return raw[:2].upper() + raw[2:]
+    if "unknown" in text.lower() and "chip" in text.lower():
+        return "unknown_ChIP"
+    return ""
+
+
+def chip_sample_metadata_lookup() -> dict[str, dict[str, str]]:
+    header, rows = read_table(env("CHIP_METADATA_FILE"))
+    if not header:
+        return {}
+    sample_col = first_col(header, [env("SAMPLE_ID_COLUMN", "sample_id"), "sample", "run", "accession", "file_prefix"])
+    mark_col = first_col(header, [env("MARK_COLUMN", "mark_or_factor"), "mark", "factor"])
+    condition_col = first_col(header, [env("CONDITION_COLUMN", "condition"), "stage", "life_stage", "treatment"])
+    lookup = {}
+    for row in rows:
+        keys = []
+        if sample_col and row.get(sample_col):
+            keys.append(row[sample_col])
+        for col in ["run", "Run", "accession", "sample_id", "file_prefix"]:
+            if col in row and row[col]:
+                keys.append(row[col])
+        mark = canonical_mark(row.get(mark_col, "")) if mark_col else ""
+        stage = canonical_stage(row.get(condition_col, "")) if condition_col else ""
+        for key in keys:
+            lookup[str(key)] = {"mark_or_factor": mark, "condition": stage}
+    return lookup
+
+
+def infer_mark_stage(raw_mark: str, raw_stage: str, path: str, metadata_lookup: dict[str, dict[str, str]]) -> tuple[str, str]:
+    label = source_label(path)
+    meta = {}
+    for sample_id, item in metadata_lookup.items():
+        if sample_id and sample_id in label:
+            meta = item
+            break
+    mark = canonical_mark(raw_mark) or meta.get("mark_or_factor", "") or canonical_mark(label)
+    stage = canonical_stage(raw_stage) or meta.get("condition", "") or canonical_stage(label)
+    if not mark:
+        clean = re.sub(r"[_-]*(all|peaks?|rep[0-9]+|r[0-9]+)$", "", label, flags=re.IGNORECASE)
+        mark = canonical_mark(clean) or "unknown_ChIP"
+    return mark, stage or "unknown"
 
 
 def read_matrix_gene_ids(path: str) -> list[str]:
@@ -395,6 +494,9 @@ def command_harmonize(_args: argparse.Namespace) -> None:
     gene_interest = read_set_file(env("GENES_OF_INTEREST_FILE"))
     epigenetic_catalog = load_epigenetic_catalog()
     epigenetic_gene_ids = {r["gene_id"] for r in epigenetic_catalog}
+    catalog_by_gene: dict[str, list[dict[str, str]]] = defaultdict(list)
+    for item in epigenetic_catalog:
+        catalog_by_gene[item["gene_id"]].append(item)
     gene_interest.update(epigenetic_gene_ids)
     deg = normalize_deg_rows()
     deg_by_gene = {r["gene_id"]: r for r in deg}
@@ -415,9 +517,23 @@ def command_harmonize(_args: argparse.Namespace) -> None:
         base = genes.get(gid, {"gene_id": gid, "gene_name": gid, "chromosome": "", "start": "", "end": "", "strand": "", "biotype": ""})
         deg_row = deg_by_gene.get(gid, {})
         fn_row = functional.get(gid, {})
+        catalog_rows = catalog_by_gene.get(gid, [])
         gene_name = base.get("gene_name") or deg_row.get("gene_name") or gid
         biotype = base.get("biotype") or deg_row.get("biotype") or fn_row.get("biotype", "")
-        fn_text = fn_row.get("functional_annotation") or fn_row.get("description") or fn_row.get("term") or ""
+        catalog_description = ""
+        for catalog_row in catalog_rows:
+            catalog_description = (
+                catalog_row.get("functional_annotation")
+                or catalog_row.get("description")
+                or catalog_row.get("annotation")
+                or catalog_row.get("product")
+                or catalog_row.get("query_id")
+                or ""
+            )
+            if catalog_description:
+                break
+        machinery_group = ";".join(sorted({r.get("machinery_group", "") for r in catalog_rows if r.get("machinery_group")}))
+        fn_text = fn_row.get("functional_annotation") or fn_row.get("description") or fn_row.get("term") or catalog_description
         row = {
             "gene_id": gid,
             "gene_name": gene_name,
@@ -429,6 +545,7 @@ def command_harmonize(_args: argparse.Namespace) -> None:
             "functional_annotation": fn_text,
             "is_gene_of_interest": str(gid in gene_interest).lower(),
             "is_epigenetic_machinery": str(gid in epigenetic_gene_ids).lower(),
+            "machinery_group": machinery_group,
         }
         if not row["chromosome"]:
             lost.append({"gene_id": gid, "reason": "missing_genomic_annotation"})
@@ -444,6 +561,7 @@ def command_harmonize(_args: argparse.Namespace) -> None:
         "functional_annotation",
         "is_gene_of_interest",
         "is_epigenetic_machinery",
+        "machinery_group",
     ]
     write_table(outdir("030-id-harmonization") / "gene_master_table.tsv", rows, header)
     write_table(outdir("030-id-harmonization") / "unmapped_genes.tsv", lost, ["gene_id", "reason"])
@@ -460,18 +578,19 @@ def load_gene_master() -> dict[str, dict[str, str]]:
 
 def annotated_peak_rows() -> list[dict[str, str]]:
     rows = []
+    metadata_lookup = chip_sample_metadata_lookup()
     for path in glob_existing(env("CHIP_ANNOTATED_PEAKS_GLOB")):
         header, data = read_table(path)
         if not header:
             continue
+        mark_col = first_col(header, [env("MARK_COLUMN", "mark_or_factor"), "mark", "factor"])
+        condition_col = first_col(header, [env("CONDITION_COLUMN", "condition"), "stage", "life_stage", "treatment"])
         for idx, row in enumerate(data, start=1):
             gene_col = first_col(header, ["nearest_gene_id", "gene_id", "associated_gene", "target_gene"])
             name_col = first_col(header, ["nearest_gene_name", "gene_name", "gene"])
             class_col = first_col(header, ["genomic_annotation", "annotation", "class", "peak_class"])
-            mark = row.get(first_col(header, [env("MARK_COLUMN", "mark_or_factor"), "mark", "factor"]), "")
-            if not mark:
-                mark = Path(path).stem.replace(".annotated", "")
-            peak_id = row.get(first_col(header, ["peak_id", "id", "name"]), "") or f"{Path(path).stem}_{idx}"
+            mark, stage = infer_mark_stage(row.get(mark_col, "") if mark_col else "", row.get(condition_col, "") if condition_col else "", path, metadata_lookup)
+            peak_id = row.get(first_col(header, ["peak_id", "id", "name"]), "") or f"{source_label(path)}_{idx}"
             rows.append(
                 {
                     "peak_id": peak_id,
@@ -479,7 +598,7 @@ def annotated_peak_rows() -> list[dict[str, str]]:
                     "start": row.get(first_col(header, ["start", "chromStart"]), ""),
                     "end": row.get(first_col(header, ["end", "chromEnd"]), ""),
                     "mark_or_factor": mark,
-                    "condition": row.get(first_col(header, [env("CONDITION_COLUMN", "condition"), "stage", "treatment"]), ""),
+                    "condition": stage,
                     "associated_gene_id": row.get(gene_col, "") if gene_col else "",
                     "associated_gene_name": row.get(name_col, "") if name_col else "",
                     "distance_to_tss": row.get(first_col(header, ["distance_to_tss", "distanceToTSS", "distance"]), ""),
@@ -498,7 +617,9 @@ def bed_peak_rows_from_master(gene_master: dict[str, dict[str, str]]) -> list[di
             gene_by_chrom[row["chromosome"]].append(row)
     rows = []
     window = as_int(env("PEAK_GENE_WINDOW_BP", "5000"), 5000)
+    metadata_lookup = chip_sample_metadata_lookup()
     for path in glob_existing(env("CHIP_PEAK_BED_GLOB")):
+        mark, stage = infer_mark_stage("", "", path, metadata_lookup)
         with open_text(path) as handle:
             for idx, line in enumerate(handle, start=1):
                 if not line.strip() or line.startswith("#"):
@@ -516,15 +637,15 @@ def bed_peak_rows_from_master(gene_master: dict[str, dict[str, str]]) -> list[di
                     if dist <= window and (best_dist is None or dist < best_dist):
                         best, best_dist = gene, dist
                 if best:
-                    source_name = Path(path).stem.replace(".consensus", "")
+                    source_name = source_label(path)
                     rows.append(
                         {
                             "peak_id": parts[3] if len(parts) > 3 and parts[3] else f"{source_name}_{idx}",
                             "chrom": chrom,
                             "start": start,
                             "end": end,
-                            "mark_or_factor": source_name,
-                            "condition": "",
+                            "mark_or_factor": mark,
+                            "condition": stage,
                             "associated_gene_id": best["gene_id"],
                             "associated_gene_name": best.get("gene_name", ""),
                             "distance_to_tss": str(best_dist or 0),
@@ -662,6 +783,7 @@ def load_diff_binding() -> list[dict[str, str]]:
     header, rows = read_table(env("CHIP_DIFF_BINDING_FILE"))
     if not header:
         return []
+    metadata_lookup = chip_sample_metadata_lookup()
     gene_col = first_col(header, ["gene_id", "nearest_gene_id", "associated_gene_id"])
     peak_col = first_col(header, ["peak_id", "id", "region", "feature_id"])
     mark_col = first_col(header, [env("MARK_COLUMN", "mark_or_factor"), "mark", "factor", "peak_set"])
@@ -672,7 +794,7 @@ def load_diff_binding() -> list[dict[str, str]]:
         item = dict(row)
         item["gene_id"] = row.get(gene_col, "") if gene_col else ""
         item["peak_id"] = row.get(peak_col, "") if peak_col else ""
-        item["mark_or_factor"] = row.get(mark_col, "") if mark_col else ""
+        item["mark_or_factor"] = infer_mark_stage(row.get(mark_col, "") if mark_col else "", "", row.get(peak_col, "") if peak_col else "", metadata_lookup)[0]
         item["chip_log2FC"] = row.get(lfc_col, "0") if lfc_col else "0"
         item["chip_padj"] = row.get(padj_col, "1") if padj_col else "1"
         lfc = as_float(item["chip_log2FC"])
@@ -760,8 +882,10 @@ def chip_metadata_mark_stage_rows() -> list[dict[str, object]]:
     batch_col = first_col(header, ["batch"])
     counts: dict[tuple[str, str], dict[str, object]] = {}
     for row in rows:
-        mark = row.get(mark_col, "") if mark_col else "unknown"
-        stage = row.get(condition_col, "") if condition_col else "unknown"
+        mark = canonical_mark(row.get(mark_col, "")) if mark_col else ""
+        stage = canonical_stage(row.get(condition_col, "")) if condition_col else ""
+        mark = mark or "unknown_ChIP"
+        stage = stage or "unknown"
         key = (mark or "unknown", stage or "unknown")
         item = counts.setdefault(
             key,
@@ -861,6 +985,7 @@ def write_gene_mark_stage_tables(
     deg_by_gene: dict[str, list[dict[str, str]]],
     peak_links: list[dict[str, str]],
     chip: dict[str, dict[str, str]],
+    rna_evidence: dict[str, dict[str, str]],
 ) -> None:
     mark_config = load_mark_config()
     expr_context = expression_context_lookup()
@@ -874,6 +999,7 @@ def write_gene_mark_stage_tables(
         gene = gene_master.get(gid, {"gene_id": gid, "gene_name": gid})
         expr = expr_context.get((gid, stage.lower()), {})
         deg_hits = deg_by_gene.get(gid, [])
+        evidence = rna_evidence.get(gid, {})
         peak_start = link.get("start", "")
         peak_end = link.get("end", "")
         peak_chrom = link.get("chrom", "")
@@ -894,6 +1020,8 @@ def write_gene_mark_stage_tables(
                 "gene_id": gid,
                 "gene_name": gene.get("gene_name", gid),
                 "is_epigenetic_machinery": gene.get("is_epigenetic_machinery", "false"),
+                "machinery_group": gene.get("machinery_group", ""),
+                "functional_annotation": gene.get("functional_annotation", ""),
                 "mark_or_factor": mark,
                 "stage_or_condition": stage,
                 "regulatory_class": mark_row.get("regulatory_class", "unknown"),
@@ -913,6 +1041,14 @@ def write_gene_mark_stage_tables(
                 "representative_deg_status": status,
                 "max_abs_log2FC": max([as_float(d.get("log2FoldChange")) for d in deg_hits] or [0]),
                 "min_padj": min([as_float(d.get("padj"), 1.0) for d in deg_hits] or [1]),
+                "wgcna_hit": evidence.get("wgcna_hit", "false"),
+                "wgcna_summary": evidence.get("wgcna_summary", ""),
+                "mfuzz_hit": evidence.get("mfuzz_hit", "false"),
+                "mfuzz_summary": evidence.get("mfuzz_summary", ""),
+                "dtu_hit": evidence.get("dtu_hit", "false"),
+                "dtu_summary": evidence.get("dtu_summary", ""),
+                "splicing_hit": evidence.get("splicing_hit", "false"),
+                "splicing_summary": evidence.get("splicing_summary", ""),
                 "source_file": link.get("source_file", ""),
             }
         )
@@ -920,6 +1056,8 @@ def write_gene_mark_stage_tables(
         "gene_id",
         "gene_name",
         "is_epigenetic_machinery",
+        "machinery_group",
+        "functional_annotation",
         "mark_or_factor",
         "stage_or_condition",
         "regulatory_class",
@@ -939,6 +1077,14 @@ def write_gene_mark_stage_tables(
         "representative_deg_status",
         "max_abs_log2FC",
         "min_padj",
+        "wgcna_hit",
+        "wgcna_summary",
+        "mfuzz_hit",
+        "mfuzz_summary",
+        "dtu_hit",
+        "dtu_summary",
+        "splicing_hit",
+        "splicing_summary",
         "source_file",
     ]
     write_table(outdir("070-integrated-tables") / "gene_mark_stage_links.tsv", relations, rel_header)
@@ -955,6 +1101,8 @@ def write_gene_mark_stage_tables(
                 "gene_id": gid,
                 "gene_name": gene.get("gene_name", gid),
                 "is_epigenetic_machinery": gene.get("is_epigenetic_machinery", "false"),
+                "machinery_group": gene.get("machinery_group", ""),
+                "functional_annotation": gene.get("functional_annotation", ""),
                 "mark_or_factor": mark,
                 "stage_or_condition": stage,
                 "n_peaks": len(items),
@@ -966,12 +1114,18 @@ def write_gene_mark_stage_tables(
                 "representative_deg_status": items[0].get("representative_deg_status", ""),
                 "gene_total_associated_peaks": chip_row.get("total_associated_peaks", "0"),
                 "gene_n_differential_peaks": chip_row.get("n_differential_peaks", "0"),
+                "wgcna_hit": items[0].get("wgcna_hit", "false"),
+                "mfuzz_hit": items[0].get("mfuzz_hit", "false"),
+                "dtu_hit": items[0].get("dtu_hit", "false"),
+                "splicing_hit": items[0].get("splicing_hit", "false"),
             }
         )
     sum_header = [
         "gene_id",
         "gene_name",
         "is_epigenetic_machinery",
+        "machinery_group",
+        "functional_annotation",
         "mark_or_factor",
         "stage_or_condition",
         "n_peaks",
@@ -983,6 +1137,10 @@ def write_gene_mark_stage_tables(
         "representative_deg_status",
         "gene_total_associated_peaks",
         "gene_n_differential_peaks",
+        "wgcna_hit",
+        "mfuzz_hit",
+        "dtu_hit",
+        "splicing_hit",
     ]
     write_table(outdir("070-integrated-tables") / "gene_mark_stage_summary.tsv", summary, sum_header)
 
@@ -1069,7 +1227,7 @@ def command_integrate(_args: argparse.Namespace) -> None:
     write_table(outdir("070-integrated-tables") / "integrated_by_contrast.tsv", contrast_rows, contrast_header)
     counts = [{"integrative_class": k, "n_genes": v} for k, v in sorted(Counter(r["integrative_class"] for r in gene_rows).items())]
     write_table(outdir("070-integrated-tables") / "integrative_class_counts.tsv", counts, ["integrative_class", "n_genes"])
-    write_gene_mark_stage_tables(gene_master, rna, deg_by_gene, peak_links, chip)
+    write_gene_mark_stage_tables(gene_master, rna, deg_by_gene, peak_links, chip, rna_evidence)
 
 
 def command_score(_args: argparse.Namespace) -> None:
@@ -1086,9 +1244,13 @@ def command_score(_args: argparse.Namespace) -> None:
         score += 2.0 if row.get("is_epigenetic_machinery", "false").lower() == "true" else 0.0
         score += min(3.0, as_int(row.get("rna_n_significant_contrasts", "0")) * 0.5)
         score += min(2.0, len([x for x in row.get("chip_marks_or_factors", "").split(";") if x]) * 0.5)
+        score += 2.0 if row.get("wgcna_hit", "false").lower() == "true" else 0.0
+        score += 1.5 if row.get("mfuzz_hit", "false").lower() == "true" else 0.0
+        score += 1.0 if row.get("dtu_hit", "false").lower() == "true" else 0.0
+        score += 1.0 if row.get("splicing_hit", "false").lower() == "true" else 0.0
         item = dict(row)
         item["candidate_score"] = f"{score:.4f}"
-        item["score_components"] = "deg_significance;rna_log2fc;promoter_peak;differential_peak;gene_interest;epigenetic_machinery;multi_contrast;multi_mark"
+        item["score_components"] = "deg_significance;rna_log2fc;promoter_peak;differential_peak;gene_interest;epigenetic_machinery;multi_contrast;multi_mark;wgcna;mfuzz;dtu;splicing"
         scored.append(item)
     scored.sort(key=lambda r: as_float(r.get("candidate_score")), reverse=True)
     header = ["candidate_score", "gene_id", "gene_name", "integrative_class", "score_components"] + [
@@ -1114,6 +1276,112 @@ def command_score(_args: argparse.Namespace) -> None:
             item["mark_or_factor"] = mark
             by_mark.append(item)
     write_table(outdir("080-candidate-scoring") / "ranked_candidates_by_mark.tsv", by_mark, ["mark_or_factor"] + header)
+
+    _h, gene_mark_rows = read_table(str(outdir("070-integrated-tables") / "gene_mark_stage_summary.tsv"))
+    scored_by_gene = {r.get("gene_id", ""): r for r in scored}
+    evidence_rows = []
+    for row in gene_mark_rows:
+        scored_row = scored_by_gene.get(row.get("gene_id", ""), {})
+        item = dict(row)
+        for key in [
+            "candidate_score",
+            "integrative_class",
+            "rna_mean_expression",
+            "rna_context_with_highest_expression",
+            "rna_n_significant_contrasts",
+            "rna_max_abs_log2FC",
+            "rna_min_padj",
+            "chip_marks_or_factors",
+            "chip_binding_statuses",
+            "wgcna_summary",
+            "mfuzz_summary",
+            "dtu_summary",
+            "splicing_summary",
+        ]:
+            item[key] = scored_row.get(key, item.get(key, ""))
+        evidence_rows.append(item)
+    evidence_rows.sort(key=lambda r: (-as_float(r.get("candidate_score")), r.get("stage_or_condition", ""), r.get("mark_or_factor", ""), r.get("gene_id", "")))
+    evidence_header = [
+        "candidate_score",
+        "gene_id",
+        "gene_name",
+        "is_epigenetic_machinery",
+        "machinery_group",
+        "functional_annotation",
+        "integrative_class",
+        "mark_or_factor",
+        "stage_or_condition",
+        "regulatory_class",
+        "expected_effect",
+        "n_peaks",
+        "n_promoter_peaks",
+        "peak_locations",
+        "rna_mean_TPM_in_stage",
+        "representative_deg_status",
+        "rna_n_significant_contrasts",
+        "rna_max_abs_log2FC",
+        "rna_min_padj",
+        "wgcna_hit",
+        "wgcna_summary",
+        "mfuzz_hit",
+        "mfuzz_summary",
+        "dtu_hit",
+        "dtu_summary",
+        "splicing_hit",
+        "splicing_summary",
+    ]
+    write_table(outdir("080-candidate-scoring") / "ranked_gene_mark_stage_evidence.tsv", evidence_rows, evidence_header)
+
+    grouped: dict[tuple[str, str], list[dict[str, str]]] = defaultdict(list)
+    for row in evidence_rows:
+        grouped[(row.get("stage_or_condition", "unknown"), row.get("mark_or_factor", "unknown"))].append(row)
+    comparisons = []
+    for (stage, mark), items in sorted(grouped.items()):
+        genes = {x.get("gene_id", "") for x in items if x.get("gene_id")}
+        comparisons.append(
+            {
+                "stage_or_condition": stage,
+                "mark_or_factor": mark,
+                "n_linked_genes": len(genes),
+                "n_peak_gene_links": sum(as_int(x.get("n_peaks", "0")) for x in items),
+                "n_promoter_linked_genes": len({x.get("gene_id", "") for x in items if as_int(x.get("n_promoter_peaks", "0")) > 0}),
+                "n_deg_linked_genes": len({x.get("gene_id", "") for x in items if x.get("representative_deg_status") in {"up", "down"}}),
+                "n_epigenetic_machinery_genes": len({x.get("gene_id", "") for x in items if x.get("is_epigenetic_machinery", "").lower() == "true"}),
+                "n_wgcna_hits": len({x.get("gene_id", "") for x in items if x.get("wgcna_hit", "").lower() == "true"}),
+                "n_mfuzz_hits": len({x.get("gene_id", "") for x in items if x.get("mfuzz_hit", "").lower() == "true"}),
+                "n_dtu_hits": len({x.get("gene_id", "") for x in items if x.get("dtu_hit", "").lower() == "true"}),
+                "n_splicing_hits": len({x.get("gene_id", "") for x in items if x.get("splicing_hit", "").lower() == "true"}),
+                "mean_candidate_score": f"{statistics.mean([as_float(x.get('candidate_score')) for x in items]):.8g}" if items else "0",
+                "top_candidate_genes": ";".join([x.get("gene_id", "") for x in sorted(items, key=lambda r: -as_float(r.get("candidate_score")))[:20] if x.get("gene_id")]),
+            }
+        )
+    comparison_header = [
+        "stage_or_condition",
+        "mark_or_factor",
+        "n_linked_genes",
+        "n_peak_gene_links",
+        "n_promoter_linked_genes",
+        "n_deg_linked_genes",
+        "n_epigenetic_machinery_genes",
+        "n_wgcna_hits",
+        "n_mfuzz_hits",
+        "n_dtu_hits",
+        "n_splicing_hits",
+        "mean_candidate_score",
+        "top_candidate_genes",
+    ]
+    write_table(outdir("080-candidate-scoring") / "stage_mark_comparison.tsv", comparisons, comparison_header)
+
+    regulator_rows = [
+        r
+        for r in scored
+        if r.get("is_epigenetic_machinery", "").lower() == "true"
+        or r.get("wgcna_hit", "").lower() == "true"
+        or r.get("mfuzz_hit", "").lower() == "true"
+        or r.get("dtu_hit", "").lower() == "true"
+        or r.get("splicing_hit", "").lower() == "true"
+    ]
+    write_table(outdir("080-candidate-scoring") / "candidate_regulators.tsv", regulator_rows, header)
 
 
 def command_visualize(_args: argparse.Namespace) -> None:
@@ -1179,6 +1447,9 @@ def command_report(_args: argparse.Namespace) -> None:
     _h, validation = read_table(str(outdir("010-input-validation") / "validation_report.tsv"))
     _h, mark_stage = read_table(str(outdir("060-chipseq-summary") / "chip_mark_stage_metadata.tsv"))
     _h, gene_mark = read_table(str(outdir("070-integrated-tables") / "gene_mark_stage_summary.tsv"))
+    _h, gene_mark_evidence = read_table(str(outdir("080-candidate-scoring") / "ranked_gene_mark_stage_evidence.tsv"))
+    _h, stage_mark_comparison = read_table(str(outdir("080-candidate-scoring") / "stage_mark_comparison.tsv"))
+    _h, candidate_regulators = read_table(str(outdir("080-candidate-scoring") / "candidate_regulators.tsv"))
     _h, epi_catalog = read_table(str(outdir("030-id-harmonization") / "epigenetic_machinery_catalog.tsv"))
     _h, figure_manifest = read_table(str(outdir("090-visualizations") / "visualization_manifest.tsv"))
     n_genes = sum(as_int(r.get("n_genes", "0")) for r in classes)
@@ -1227,6 +1498,9 @@ def command_report(_args: argparse.Namespace) -> None:
             "- `070-integrated-tables/gene_mark_stage_links.tsv`: one row per peak-gene-mark-stage association.",
             "- `070-integrated-tables/gene_mark_stage_summary.tsv`: collapsed catalog by gene, mark, and stage.",
             "- `070-integrated-tables/mark_to_gene_catalog.tsv`: marks with linked genes and epigenetic machinery counts.",
+            "- `080-candidate-scoring/ranked_gene_mark_stage_evidence.tsv`: ranked gene-mark-stage associations with RNA, WGCNA, Mfuzz, DTU, and splicing evidence.",
+            "- `080-candidate-scoring/stage_mark_comparison.tsv`: stage-by-mark comparison table.",
+            "- `080-candidate-scoring/candidate_regulators.tsv`: high-priority regulators supported by epigenetic machinery or RNA network/isoform evidence.",
             "",
             "## Limitations",
             "",
@@ -1342,16 +1616,24 @@ def command_report(_args: argparse.Namespace) -> None:
     </section>
     <section>
       <h2>Top Candidate Genes</h2>
-      {table_html(top, ["candidate_score", "gene_id", "gene_name", "integrative_class", "is_epigenetic_machinery"], 20)}
+      {table_html(top, ["candidate_score", "gene_id", "gene_name", "integrative_class", "is_epigenetic_machinery", "machinery_group", "wgcna_hit", "mfuzz_hit", "dtu_hit", "splicing_hit"], 20)}
+    </section>
+    <section>
+      <h2>Candidate Regulators</h2>
+      {table_html(candidate_regulators, ["candidate_score", "gene_id", "gene_name", "integrative_class", "is_epigenetic_machinery", "machinery_group", "wgcna_hit", "mfuzz_hit", "dtu_hit", "splicing_hit"], 25)}
     </section>
     <section>
       <h2>Epigenetic Machinery Catalog</h2>
       {table_html(epi_catalog, ["gene_id", "gene_name", "machinery_group", "description", "catalog_source"], 25)}
     </section>
     <section>
-      <h2>Gene-Mark-Stage Links</h2>
-      {table_html(gene_mark, ["gene_id", "gene_name", "mark_or_factor", "stage_or_condition", "n_peaks", "n_promoter_peaks"], 25)}
-      <p class="muted">If this table is empty locally, run the pipeline on the server where ChIP annotated peaks and count outputs are stored.</p>
+      <h2>Stage-Mark Comparisons</h2>
+      {table_html(stage_mark_comparison, ["stage_or_condition", "mark_or_factor", "n_linked_genes", "n_deg_linked_genes", "n_epigenetic_machinery_genes", "n_wgcna_hits", "n_mfuzz_hits", "n_dtu_hits", "n_splicing_hits", "mean_candidate_score"], 40)}
+    </section>
+    <section>
+      <h2>Ranked Gene-Mark-Stage Evidence</h2>
+      {table_html(gene_mark_evidence or gene_mark, ["candidate_score", "gene_id", "gene_name", "mark_or_factor", "stage_or_condition", "n_peaks", "n_promoter_peaks", "representative_deg_status", "is_epigenetic_machinery", "machinery_group", "wgcna_hit", "mfuzz_hit", "dtu_hit", "splicing_hit"], 30)}
+      <p class="muted">This table is the main answer: each row links one gene to one mark and stage, then adds expression and RNA evidence.</p>
     </section>
     <section>
       <h2>Input Validation</h2>
@@ -1360,6 +1642,8 @@ def command_report(_args: argparse.Namespace) -> None:
     <section class="panel">
       <h2>Key Output Files</h2>
       <p><code>070-integrated-tables/gene_mark_stage_summary.tsv</code> answers the central gene-mark-stage question.</p>
+      <p><code>080-candidate-scoring/ranked_gene_mark_stage_evidence.tsv</code> ranks those gene-mark-stage associations with RNA, ChIP, WGCNA, Mfuzz, DTU, and splicing evidence.</p>
+      <p><code>080-candidate-scoring/stage_mark_comparison.tsv</code> compares marks across life-cycle stages.</p>
       <p><code>080-candidate-scoring/candidate_gene_scores.tsv</code> ranks potential regulators of parasite plasticity.</p>
       <p><code>030-id-harmonization/epigenetic_machinery_catalog.tsv</code> consolidates the S. mansoni epigenetic machinery catalog.</p>
     </section>

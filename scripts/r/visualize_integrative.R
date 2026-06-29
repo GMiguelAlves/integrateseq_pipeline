@@ -119,6 +119,7 @@ catalog <- read_tsv(file.path(project_dir, "030-id-harmonization", "epigenetic_m
 chip_mark_stage <- read_tsv(file.path(project_dir, "060-chipseq-summary", "chip_mark_stage_metadata.tsv"))
 gene_mark_summary <- read_tsv(file.path(project_dir, "070-integrated-tables", "gene_mark_stage_summary.tsv"))
 gene_mark_links <- read_tsv(file.path(project_dir, "070-integrated-tables", "gene_mark_stage_links.tsv"))
+stage_mark_comparison <- read_tsv(file.path(project_dir, "080-candidate-scoring", "stage_mark_comparison.tsv"))
 
 if (nrow(class_counts) > 0 && all(c("integrative_class", "n_genes") %in% names(class_counts))) {
   class_counts$n_genes <- as_num(class_counts$n_genes)
@@ -205,6 +206,35 @@ p <- plot_heatmap(
   "No gene-mark-stage links were found."
 )
 save_plot(p, "gene_mark_stage_matrix", 8.5, 6)
+
+if (nrow(stage_mark_comparison) > 0 && all(c("mark_or_factor", "stage_or_condition") %in% names(stage_mark_comparison))) {
+  stage_mark_comparison$n_deg_linked_genes <- as_num(safe_col(stage_mark_comparison, "n_deg_linked_genes", 0))
+  stage_mark_comparison$n_epigenetic_machinery_genes <- as_num(safe_col(stage_mark_comparison, "n_epigenetic_machinery_genes", 0))
+  stage_mark_comparison$n_wgcna_hits <- as_num(safe_col(stage_mark_comparison, "n_wgcna_hits", 0))
+  stage_mark_comparison$n_mfuzz_hits <- as_num(safe_col(stage_mark_comparison, "n_mfuzz_hits", 0))
+  stage_mark_comparison$n_dtu_hits <- as_num(safe_col(stage_mark_comparison, "n_dtu_hits", 0))
+  stage_mark_comparison$n_splicing_hits <- as_num(safe_col(stage_mark_comparison, "n_splicing_hits", 0))
+  stage_mark_comparison$integrated_evidence <- with(
+    stage_mark_comparison,
+    n_deg_linked_genes + n_epigenetic_machinery_genes + n_wgcna_hits + n_mfuzz_hits + n_dtu_hits + n_splicing_hits
+  )
+  p <- ggplot(stage_mark_comparison, aes(x = stage_or_condition, y = mark_or_factor, fill = integrated_evidence)) +
+    geom_tile(color = "white", linewidth = 0.6) +
+    geom_text(aes(label = integrated_evidence), size = 3, color = "#111827") +
+    scale_fill_gradient(low = "#ecfeff", high = "#0f766e") +
+    labs(
+      title = "Integrated evidence by stage and mark",
+      subtitle = "Counts combine DE-linked genes, epigenetic machinery, WGCNA, Mfuzz, DTU, and splicing evidence.",
+      x = "Stage or condition",
+      y = "Mark or factor",
+      fill = "Evidence"
+    ) +
+    theme_integrative() +
+    theme(axis.text.x = element_text(angle = 35, hjust = 1))
+} else {
+  p <- empty_plot("Integrated evidence by stage and mark", "Run scoring to populate stage-mark comparisons.")
+}
+save_plot(p, "stage_mark_integrated_evidence", 8.5, 6)
 
 if (nrow(gene_mark_links) > 0) {
   links <- gene_mark_links
