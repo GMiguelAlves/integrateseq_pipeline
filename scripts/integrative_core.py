@@ -303,26 +303,145 @@ def metadata_groups(path: str) -> dict[str, str]:
     header, rows = read_table(path)
     if not header:
         return {}
-    sample_col = first_col(header, [env("SAMPLE_ID_COLUMN", "sample_id"), "sample", "file_prefix"])
-    if not sample_col:
-        return {}
+    sample_col = first_col(
+        header,
+        [
+            env("SAMPLE_ID_COLUMN", "sample_id"),
+            "sample_id",
+            "sample",
+            "Sample",
+            "Run",
+            "run",
+            "accession",
+            "file_prefix",
+        ],
+    )
     group_cols = [c.strip() for c in env("GROUP_COLUMNS", "").split(",") if c.strip()]
+    stage_cols = [c.strip() for c in env("RNA_STAGE_COLUMNS", "").split(",") if c.strip()]
     groups = {}
     for row in rows:
-        sid = row.get(sample_col, "")
-        if not sid:
+        keys = metadata_sample_keys(header, row, sample_col)
+        if not keys:
             continue
-        values = [row.get(c, "") for c in group_cols if row.get(c, "")]
-        groups[sid] = " | ".join(values) if values else sid
+        stage = row_stage(row, header, stage_cols, group_cols)
+        for key in keys:
+            for alias in sample_aliases(key):
+                groups[alias] = stage
     return groups
 
 
+def metadata_sample_keys(header: list[str], row: dict[str, str], sample_col: str) -> list[str]:
+    candidates = [
+        sample_col,
+        env("SAMPLE_ID_COLUMN", "sample_id"),
+        "sample_id",
+        "sample",
+        "Sample",
+        "sample_name",
+        "SampleName",
+        "Run",
+        "run",
+        "accession",
+        "run_accession",
+        "Run accession",
+        "sample_accession",
+        "Sample accession",
+        "BioSample",
+        "biosample",
+        "Experiment",
+        "experiment",
+        "library",
+        "library_id",
+        "library_name",
+        "Library Name",
+        "file_prefix",
+        "filename",
+        "file",
+    ]
+    lower_to_col = {c.lower(): c for c in header}
+    keys: list[str] = []
+    for col in candidates:
+        actual = col if col in row else lower_to_col.get(str(col).lower(), "")
+        value = row.get(actual, "") if actual else ""
+        if value:
+            keys.append(value)
+    for col in header:
+        lower = col.lower()
+        if any(token in lower for token in ["sample", "run", "accession", "biosample", "experiment", "library", "file_prefix", "filename"]):
+            value = row.get(col, "")
+            if value:
+                keys.append(value)
+    seen = set()
+    out = []
+    for key in keys:
+        text = str(key).strip()
+        if text and text not in seen:
+            out.append(text)
+            seen.add(text)
+    return out
+
+
+def sample_aliases(value: str) -> set[str]:
+    text = str(value or "").strip()
+    if not text:
+        return set()
+    raw_items = {text, source_label(text)}
+    out: set[str] = set()
+    for item in raw_items:
+        if not item:
+            continue
+        variants = {
+            item,
+            safe_id(item),
+            re.sub(r"[_-]R[0-9]+$", "", item, flags=re.IGNORECASE),
+            re.sub(r"[_-]rep[0-9]+$", "", item, flags=re.IGNORECASE),
+            re.sub(r"[_-](counts|tpm|cpm|quant)$", "", item, flags=re.IGNORECASE),
+        }
+        for variant in variants:
+            variant = str(variant).strip()
+            if variant:
+                out.add(variant)
+    return {x for x in out if x.lower() != "unknown"}
+
+
+def row_stage(row: dict[str, str], header: list[str], stage_cols: list[str], group_cols: list[str]) -> str:
+    lower_to_col = {c.lower(): c for c in header}
+    for col in stage_cols + group_cols:
+        actual = col if col in row else lower_to_col.get(str(col).lower(), "")
+        if actual:
+            stage = canonical_stage(row.get(actual, ""))
+            if stage:
+                return stage
+    searchable = [
+        c
+        for c in header
+        if any(token in c.lower() for token in ["stage", "condition", "treatment", "tissue", "source", "title", "description", "characteristic"])
+    ]
+    for col in searchable:
+        stage = canonical_stage(row.get(col, ""))
+        if stage:
+            return stage
+    values = [row.get(c, "") for c in group_cols if row.get(c, "")]
+    joined = " | ".join(values)
+    return canonical_stage(joined) or "unknown"
+
+
+def resolve_sample_group(sample: str, groups: dict[str, str]) -> tuple[str, str, str]:
+    for alias in sample_aliases(sample):
+        if alias in groups:
+            return groups[alias], "metadata", alias
+    sample_text = str(sample or "")
+    for key, group in groups.items():
+        if len(key) >= 5 and (key in sample_text or sample_text in key):
+            return group, "metadata_substring", key
+    inferred = canonical_stage(sample_text)
+    if inferred:
+        return inferred, "sample_name_stage", ""
+    return "unknown", "unmapped", ""
+
+
 def sample_group(sample: str, groups: dict[str, str]) -> str:
-    if sample in groups:
-        return groups[sample]
-    cleaned = re.sub(r"[_-]R[0-9]+$", "", sample)
-    cleaned = re.sub(r"[_-]rep[0-9]+$", "", cleaned, flags=re.IGNORECASE)
-    return cleaned
+    return resolve_sample_group(sample, groups)[0]
 
 
 def normalize_deg_rows() -> list[dict[str, str]]:
@@ -727,6 +846,19 @@ def command_summarize_rna(_args: argparse.Namespace) -> None:
         by_gene_deg[row["gene_id"]].append(row)
     summaries = []
     context_rows = []
+    sample_group_rows = []
+    sample_group_cache: dict[str, tuple[str, str, str]] = {}
+    for sample in sample_cols:
+        group, status, matched_key = resolve_sample_group(sample, groups)
+        sample_group_cache[sample] = (group, status, matched_key)
+        sample_group_rows.append(
+            {
+                "sample_id": sample,
+                "stage_or_condition": group,
+                "mapping_status": status,
+                "matched_metadata_key": matched_key,
+            }
+        )
     for row in rows:
         gid = row.get(gene_col, "")
         if not gid:
@@ -735,7 +867,7 @@ def command_summarize_rna(_args: argparse.Namespace) -> None:
         all_values = []
         for sample in sample_cols:
             value = as_float(row.get(sample, "0"))
-            values_by_group[sample_group(sample, groups)].append(value)
+            values_by_group[sample_group_cache[sample][0]].append(value)
             all_values.append(value)
         group_means = {g: (sum(v) / len(v) if v else 0.0) for g, v in values_by_group.items()}
         top_group = max(group_means, key=group_means.get) if group_means else ""
@@ -796,6 +928,11 @@ def command_summarize_rna(_args: argparse.Namespace) -> None:
         outdir("050-rnaseq-summary") / "rna_expression_by_context.tsv",
         context_rows,
         ["gene_id", "stage_or_condition", "mean_TPM", "mean_log2TPM", "fraction_expressed", "n_samples"],
+    )
+    write_table(
+        outdir("050-rnaseq-summary") / "rna_sample_group_mapping.tsv",
+        sample_group_rows,
+        ["sample_id", "stage_or_condition", "mapping_status", "matched_metadata_key"],
     )
     deg_header = ["contrast_id", "gene_id", "gene_name", "log2FoldChange", "pvalue", "padj", "deg_status"]
     write_table(outdir("050-rnaseq-summary") / "rna_deg_long.tsv", deg, deg_header + sorted({k for r in deg for k in r} - set(deg_header)))
@@ -1687,6 +1824,7 @@ def command_report(_args: argparse.Namespace) -> None:
       <p><code>080-candidate-scoring/ranked_gene_mark_stage_evidence.tsv</code> ranks those gene-mark-stage associations with RNA, ChIP, WGCNA, Mfuzz, DTU, and splicing evidence.</p>
       <p><code>080-candidate-scoring/stage_mark_comparison.tsv</code> compares marks across life-cycle stages.</p>
       <p><code>080-candidate-scoring/candidate_gene_scores.tsv</code> ranks potential regulators of parasite plasticity.</p>
+      <p><code>050-rnaseq-summary/rna_sample_group_mapping.tsv</code> diagnoses RNA sample-to-stage mapping for gene panels.</p>
       <p><code>030-id-harmonization/epigenetic_machinery_catalog.tsv</code> consolidates the S. mansoni epigenetic machinery catalog.</p>
     </section>
   </main>

@@ -22,4 +22,8 @@ export GENOME_FASTA="/path/on/server/reference/genome.fa.gz"
 # Optional curated machinery catalog, if it lives outside the RNA-seq pipeline.
 export RNA_GENE_CATALOG_EXTRA="/path/on/server/results/tables/gene_catalog.tsv"
 
+# Optional: override when the RNA metadata uses different life-cycle stage
+# column names.
+export RNA_STAGE_COLUMNS="stage,life_stage,lifecycle_stage,life_cycle_stage,developmental_stage,condition,treatment,tissue,source_name,title,description,characteristics_ch1"
+
 export RUN_MODE="slurm"

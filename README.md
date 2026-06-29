@@ -168,6 +168,7 @@ Key outputs are:
 - `040-peak-gene-mapping/gene_to_peak_summary.tsv`
 - `050-rnaseq-summary/rna_gene_summary.tsv`
 - `050-rnaseq-summary/rna_expression_by_context.tsv`
+- `050-rnaseq-summary/rna_sample_group_mapping.tsv`
 - `060-chipseq-summary/chip_gene_summary.tsv`
 - `070-integrated-tables/integrated_gene_table.tsv`
 - `070-integrated-tables/integrated_by_contrast.tsv`
@@ -205,9 +206,13 @@ one readable view.
 
 - Missing RNA matrices are fatal. Missing ChIP outputs are warnings so the
   integration can proceed while the ChIP-seq pipeline is still being generated.
-- If sample IDs in metadata do not match expression matrix columns, expression
-  groups are inferred from sample names by removing replicate suffixes such as
-  `_R1`.
+- If RNA expression appears only as `unknown` in gene panels, inspect
+  `050-rnaseq-summary/rna_sample_group_mapping.tsv`. The `mapping_status`
+  column shows whether each expression matrix column was matched to metadata,
+  matched by substring, inferred from the sample name, or left unmapped.
+- If the RNA metadata uses non-standard stage columns, set
+  `RNA_STAGE_COLUMNS` to a comma-separated list of those columns before running
+  `summarize-rna`.
 - If no GTF/GFF3 is provided, `gene_master_table.tsv` is built from gene IDs
   found in RNA-seq, DEG, ChIP, functional annotation, and genes-of-interest
   files.
