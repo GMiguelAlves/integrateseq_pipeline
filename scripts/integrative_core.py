@@ -108,6 +108,99 @@ def as_int(value: object, default: int = 0) -> int:
         return default
 
 
+def is_true(value: object) -> bool:
+    return str(value or "").strip().lower() in {"true", "1", "yes", "y"}
+
+
+def fmt_float(value: object, digits: int = 8) -> str:
+    try:
+        number = float(value)
+    except (TypeError, ValueError):
+        return ""
+    if math.isnan(number) or math.isinf(number):
+        return ""
+    return f"{number:.{digits}g}"
+
+
+def log_choose(n: int, k: int) -> float:
+    if k < 0 or k > n:
+        return float("-inf")
+    return math.lgamma(n + 1) - math.lgamma(k + 1) - math.lgamma(n - k + 1)
+
+
+def fisher_right_tail(overlap: int, selected_size: int, marked_size: int, universe_size: int) -> float:
+    if universe_size <= 0 or selected_size <= 0 or marked_size <= 0 or overlap <= 0:
+        return 1.0
+    selected_size = min(selected_size, universe_size)
+    marked_size = min(marked_size, universe_size)
+    min_i = max(0, selected_size - (universe_size - marked_size))
+    max_i = min(selected_size, marked_size)
+    if overlap < min_i:
+        overlap = min_i
+    if overlap > max_i:
+        return 0.0
+    log_den = log_choose(universe_size, selected_size)
+    terms = [
+        log_choose(marked_size, i) + log_choose(universe_size - marked_size, selected_size - i) - log_den
+        for i in range(overlap, max_i + 1)
+    ]
+    terms = [x for x in terms if not math.isinf(x)]
+    if not terms:
+        return 1.0
+    max_log = max(terms)
+    prob = math.exp(max_log) * sum(math.exp(x - max_log) for x in terms)
+    return max(0.0, min(1.0, prob))
+
+
+def bh_adjust(p_values: list[float]) -> list[float]:
+    if not p_values:
+        return []
+    m = len(p_values)
+    q_values = [1.0] * m
+    prev = 1.0
+    ordered = sorted(enumerate(p_values), key=lambda x: x[1])
+    for rank, (idx, pval) in reversed(list(enumerate(ordered, start=1))):
+        qval = min(prev, pval * m / rank)
+        q_values[idx] = max(0.0, min(1.0, qval))
+        prev = q_values[idx]
+    return q_values
+
+
+def rank_values(values: list[float]) -> list[float]:
+    order = sorted(enumerate(values), key=lambda x: x[1])
+    ranks = [0.0] * len(values)
+    i = 0
+    while i < len(order):
+        j = i
+        while j + 1 < len(order) and order[j + 1][1] == order[i][1]:
+            j += 1
+        rank = (i + j + 2) / 2.0
+        for k in range(i, j + 1):
+            ranks[order[k][0]] = rank
+        i = j + 1
+    return ranks
+
+
+def pearson_corr(xs: list[float], ys: list[float]):
+    if len(xs) != len(ys) or len(xs) < 2:
+        return None
+    mean_x = statistics.mean(xs)
+    mean_y = statistics.mean(ys)
+    dx = [x - mean_x for x in xs]
+    dy = [y - mean_y for y in ys]
+    ssx = sum(x * x for x in dx)
+    ssy = sum(y * y for y in dy)
+    if ssx <= 0 or ssy <= 0:
+        return None
+    return sum(x * y for x, y in zip(dx, dy)) / math.sqrt(ssx * ssy)
+
+
+def spearman_corr(xs: list[float], ys: list[float]):
+    if len(xs) != len(ys) or len(xs) < 2:
+        return None
+    return pearson_corr(rank_values(xs), rank_values(ys))
+
+
 def safe_id(value: str) -> str:
     return re.sub(r"[^A-Za-z0-9_.-]+", "_", value.strip()) or "unknown"
 
@@ -130,7 +223,8 @@ STAGE_ALIASES = {
     "sporocysts": "sporocysts",
     "pooled": "all_stages",
 }
-_KNOWN_MARKS_CACHE: list[str] | None = None
+STAGE_ORDER = ["adult", "eggs", "cercariae", "miracidia", "schistosomula", "sporocysts", "all_stages", "unknown"]
+_KNOWN_MARKS_CACHE = None
 
 
 def glob_existing(pattern: str) -> list[str]:
@@ -158,6 +252,23 @@ def canonical_stage(value: str) -> str:
         if token in STAGE_ALIASES:
             return STAGE_ALIASES[token]
     return ""
+
+
+def stage_label(value: str) -> str:
+    stage = canonical_stage(value)
+    if stage:
+        return stage
+    text = str(value or "").strip()
+    if not text or text.lower() in {"na", "n/a", "nan", "none", "null", "not_available"}:
+        return "unknown"
+    return safe_id(text).lower()
+
+
+def stage_sort_key(stage: str) -> tuple[int, str]:
+    stage = stage_label(stage)
+    if stage in STAGE_ORDER:
+        return (STAGE_ORDER.index(stage), stage)
+    return (len(STAGE_ORDER), stage)
 
 
 def known_marks() -> list[str]:
@@ -1127,6 +1238,364 @@ def supplemental_rna_evidence() -> dict[str, dict[str, str]]:
     return evidence
 
 
+def mark_label(value: str) -> str:
+    return canonical_mark(value) or str(value or "").strip() or "unknown_ChIP"
+
+
+def stage_expression_table() -> dict[tuple[str, str], dict[str, str]]:
+    header, rows = read_table(str(outdir("050-rnaseq-summary") / "rna_expression_by_context.tsv"))
+    if not header:
+        header, rows = read_table(env("RNA_EXPRESSION_CONTEXT"))
+    if not header:
+        return {}
+    gene_col = first_col(header, ["gene_id", "matched_gene_id", "gene"])
+    stage_col = first_col(header, ["stage_or_condition", "stage", "condition", "stage_class", "context"])
+    tpm_col = first_col(header, ["mean_TPM", "mean_tpm", "TPM", "mean_expression"])
+    log_col = first_col(header, ["mean_log2TPM", "mean_log2_tpm", "log2TPM"])
+    n_col = first_col(header, ["n_samples", "samples", "replicates"])
+    grouped: dict[tuple[str, str], dict[str, float]] = defaultdict(lambda: {"weighted_tpm": 0.0, "n": 0.0})
+    for row in rows:
+        gid = row.get(gene_col, "") if gene_col else ""
+        stage = stage_label(row.get(stage_col, "")) if stage_col else "unknown"
+        if not gid or stage in {"unknown", "all_stages"}:
+            continue
+        tpm = as_float(row.get(tpm_col, "0") if tpm_col else row.get(log_col, "0"))
+        if not tpm_col and log_col:
+            tpm = (2**tpm) - 1
+        n = max(1.0, as_float(row.get(n_col, "1") if n_col else "1", 1.0))
+        grouped[(gid, stage)]["weighted_tpm"] += tpm * n
+        grouped[(gid, stage)]["n"] += n
+    out = {}
+    for key, item in grouped.items():
+        n = item["n"]
+        mean_tpm = item["weighted_tpm"] / n if n else 0.0
+        out[key] = {
+            "mean_TPM": fmt_float(mean_tpm),
+            "mean_log2TPM": fmt_float(math.log2(mean_tpm + 1)),
+            "n_samples": fmt_float(n),
+        }
+    return out
+
+
+def assayed_mark_stages(evidence_rows: list[dict[str, str]]) -> dict[str, set[str]]:
+    _h, mark_stage_rows = read_table(str(outdir("060-chipseq-summary") / "chip_mark_stage_metadata.tsv"))
+    combos: dict[str, set[str]] = defaultdict(set)
+    for row in mark_stage_rows:
+        mark = mark_label(row.get("mark_or_factor", ""))
+        stage = stage_label(row.get("stage_or_condition", ""))
+        if stage in {"unknown", "all_stages"}:
+            continue
+        if as_float(row.get("n_samples", "1"), 1.0) <= 0:
+            continue
+        combos[mark].add(stage)
+    if combos:
+        return combos
+    for row in evidence_rows:
+        mark = mark_label(row.get("mark_or_factor", ""))
+        stage = stage_label(row.get("stage_or_condition", ""))
+        if stage not in {"unknown", "all_stages"}:
+            combos[mark].add(stage)
+    return combos
+
+
+def write_mark_enrichment_tests(scored: list[dict[str, str]], evidence_rows: list[dict[str, str]]) -> None:
+    header = [
+        "target_set",
+        "feature_scope",
+        "mark_or_factor",
+        "stage_or_condition",
+        "universe_genes",
+        "target_genes",
+        "marked_genes",
+        "overlap_genes",
+        "expected_overlap",
+        "fold_enrichment",
+        "odds_ratio",
+        "p_value",
+        "q_value",
+        "top_overlap_genes",
+        "overlap_gene_ids",
+    ]
+    scored_by_gene = {r.get("gene_id", ""): r for r in scored if r.get("gene_id")}
+    gene_meta: dict[str, dict[str, str]] = dict(scored_by_gene)
+    for row in evidence_rows:
+        gid = row.get("gene_id", "")
+        if gid and gid not in gene_meta:
+            gene_meta[gid] = row
+    universe = {gid for gid in gene_meta if gid}
+    if not universe:
+        write_table(outdir("080-candidate-scoring") / "mark_enrichment_tests.tsv", [], header)
+        return
+
+    deg_genes = {
+        gid
+        for gid, row in gene_meta.items()
+        if row.get("representative_deg_status", "") in {"up", "down"}
+        or row.get("integrative_class", "").startswith("DEG")
+        or as_int(row.get("rna_n_significant_contrasts", "0")) > 0
+    }
+    machinery_genes = {gid for gid, row in gene_meta.items() if is_true(row.get("is_epigenetic_machinery", "false"))}
+    score_by_gene = {gid: as_float(row.get("candidate_score", "0")) for gid, row in gene_meta.items()}
+
+    marked_any: dict[tuple[str, str], set[str]] = defaultdict(set)
+    marked_promoter: dict[tuple[str, str], set[str]] = defaultdict(set)
+    for row in evidence_rows:
+        gid = row.get("gene_id", "")
+        if not gid:
+            continue
+        mark = mark_label(row.get("mark_or_factor", ""))
+        stage = stage_label(row.get("stage_or_condition", ""))
+        if as_int(row.get("n_peaks", "0")) > 0:
+            marked_any[(stage, mark)].add(gid)
+            marked_any[("all_observed_stages", mark)].add(gid)
+        if as_int(row.get("n_promoter_peaks", "0")) > 0:
+            marked_promoter[(stage, mark)].add(gid)
+            marked_promoter[("all_observed_stages", mark)].add(gid)
+
+    target_sets = [
+        ("DEG", deg_genes),
+        ("epigenetic_machinery", machinery_genes),
+    ]
+    feature_sets = [
+        ("any_peak", marked_any),
+        ("promoter_peak", marked_promoter),
+    ]
+    out_rows: list[dict[str, object]] = []
+    universe_size = len(universe)
+    for feature_scope, mark_sets in feature_sets:
+        for (stage, mark), marked in sorted(mark_sets.items(), key=lambda x: (stage_sort_key(x[0][0]), x[0][1])):
+            marked = marked & universe
+            if not marked:
+                continue
+            for target_name, target in target_sets:
+                target = target & universe
+                if not target:
+                    continue
+                overlap_ids = sorted(marked & target, key=lambda gid: (-score_by_gene.get(gid, 0.0), gid))
+                a = len(overlap_ids)
+                selected_size = len(target)
+                marked_size = len(marked)
+                expected = selected_size * marked_size / universe_size if universe_size else 0.0
+                fold = (a / expected) if expected > 0 else 0.0
+                b = selected_size - a
+                c = marked_size - a
+                d = universe_size - a - b - c
+                odds = ((a + 0.5) * (d + 0.5)) / ((b + 0.5) * (c + 0.5)) if universe_size else 0.0
+                pval = fisher_right_tail(a, selected_size, marked_size, universe_size)
+                top_overlap = []
+                for gid in overlap_ids[:20]:
+                    row = gene_meta.get(gid, {})
+                    label = row.get("gene_name", "")
+                    top_overlap.append(f"{gid}({label})" if label and label != gid else gid)
+                out_rows.append(
+                    {
+                        "target_set": target_name,
+                        "feature_scope": feature_scope,
+                        "mark_or_factor": mark,
+                        "stage_or_condition": stage,
+                        "universe_genes": universe_size,
+                        "target_genes": selected_size,
+                        "marked_genes": marked_size,
+                        "overlap_genes": a,
+                        "expected_overlap": fmt_float(expected),
+                        "fold_enrichment": fmt_float(fold),
+                        "odds_ratio": fmt_float(odds),
+                        "p_value": fmt_float(pval),
+                        "q_value": "",
+                        "top_overlap_genes": ";".join(top_overlap),
+                        "overlap_gene_ids": ";".join(overlap_ids),
+                    }
+                )
+    q_values = bh_adjust([as_float(row.get("p_value", "1"), 1.0) for row in out_rows])
+    for row, qval in zip(out_rows, q_values):
+        row["q_value"] = fmt_float(qval)
+    out_rows.sort(key=lambda r: (as_float(r.get("q_value", "1"), 1.0), as_float(r.get("p_value", "1"), 1.0), str(r.get("target_set")), str(r.get("mark_or_factor"))))
+    write_table(outdir("080-candidate-scoring") / "mark_enrichment_tests.tsv", out_rows, header)
+
+
+def write_gene_mark_stage_correlations(scored: list[dict[str, str]], evidence_rows: list[dict[str, str]]) -> None:
+    signal_header = [
+        "gene_id",
+        "gene_name",
+        "is_epigenetic_machinery",
+        "machinery_group",
+        "functional_annotation",
+        "candidate_score",
+        "integrative_class",
+        "representative_deg_status",
+        "wgcna_hit",
+        "mfuzz_hit",
+        "dtu_hit",
+        "splicing_hit",
+        "mark_or_factor",
+        "stage_or_condition",
+        "rna_mean_TPM",
+        "rna_mean_log2TPM",
+        "n_peaks",
+        "n_promoter_peaks",
+        "is_mark_assayed_in_stage",
+        "signal_source",
+    ]
+    corr_header = [
+        "gene_id",
+        "gene_name",
+        "is_epigenetic_machinery",
+        "machinery_group",
+        "functional_annotation",
+        "candidate_score",
+        "integrative_class",
+        "representative_deg_status",
+        "wgcna_hit",
+        "mfuzz_hit",
+        "dtu_hit",
+        "splicing_hit",
+        "mark_or_factor",
+        "n_stage_points",
+        "stages",
+        "mean_rna_TPM",
+        "mean_total_peaks",
+        "mean_promoter_peaks",
+        "pearson_rna_vs_total_peaks",
+        "spearman_rna_vs_total_peaks",
+        "pearson_rna_vs_promoter_peaks",
+        "spearman_rna_vs_promoter_peaks",
+        "max_abs_correlation",
+        "best_signal",
+        "correlation_direction",
+        "correlation_note",
+        "stage_values",
+    ]
+
+    expr_by_stage = stage_expression_table()
+    mark_stages = assayed_mark_stages(evidence_rows)
+    gene_meta: dict[str, dict[str, str]] = {r.get("gene_id", ""): r for r in scored if r.get("gene_id")}
+    for row in evidence_rows:
+        gid = row.get("gene_id", "")
+        if gid and gid not in gene_meta:
+            gene_meta[gid] = row
+
+    peak_by_key: dict[tuple[str, str, str], dict[str, int]] = defaultdict(lambda: {"n_peaks": 0, "n_promoter_peaks": 0})
+    genes_by_mark: dict[str, set[str]] = defaultdict(set)
+    for row in evidence_rows:
+        gid = row.get("gene_id", "")
+        if not gid:
+            continue
+        mark = mark_label(row.get("mark_or_factor", ""))
+        stage = stage_label(row.get("stage_or_condition", ""))
+        if stage in {"unknown", "all_stages"}:
+            continue
+        key = (gid, mark, stage)
+        peak_by_key[key]["n_peaks"] += as_int(row.get("n_peaks", "0"))
+        peak_by_key[key]["n_promoter_peaks"] += as_int(row.get("n_promoter_peaks", "0"))
+        genes_by_mark[mark].add(gid)
+
+    signal_rows: list[dict[str, object]] = []
+    corr_rows: list[dict[str, object]] = []
+    for mark, stages in sorted(mark_stages.items()):
+        ordered_stages = sorted(stages, key=stage_sort_key)
+        for gid in sorted(genes_by_mark.get(mark, set())):
+            meta = gene_meta.get(gid, {"gene_id": gid, "gene_name": gid})
+            per_stage = []
+            for stage in ordered_stages:
+                expr = expr_by_stage.get((gid, stage))
+                if not expr:
+                    continue
+                signal = peak_by_key.get((gid, mark, stage), {"n_peaks": 0, "n_promoter_peaks": 0})
+                n_peaks = signal["n_peaks"]
+                n_promoter = signal["n_promoter_peaks"]
+                row = {
+                    "gene_id": gid,
+                    "gene_name": meta.get("gene_name", gid),
+                    "is_epigenetic_machinery": meta.get("is_epigenetic_machinery", "false"),
+                    "machinery_group": meta.get("machinery_group", ""),
+                    "functional_annotation": meta.get("functional_annotation", ""),
+                    "candidate_score": meta.get("candidate_score", ""),
+                    "integrative_class": meta.get("integrative_class", ""),
+                    "representative_deg_status": meta.get("representative_deg_status", ""),
+                    "wgcna_hit": meta.get("wgcna_hit", "false"),
+                    "mfuzz_hit": meta.get("mfuzz_hit", "false"),
+                    "dtu_hit": meta.get("dtu_hit", "false"),
+                    "splicing_hit": meta.get("splicing_hit", "false"),
+                    "mark_or_factor": mark,
+                    "stage_or_condition": stage,
+                    "rna_mean_TPM": expr.get("mean_TPM", "0"),
+                    "rna_mean_log2TPM": expr.get("mean_log2TPM", "0"),
+                    "n_peaks": n_peaks,
+                    "n_promoter_peaks": n_promoter,
+                    "is_mark_assayed_in_stage": "true",
+                    "signal_source": "observed_peak" if n_peaks > 0 else "assayed_no_linked_peak",
+                }
+                signal_rows.append(row)
+                per_stage.append(row)
+            if len(per_stage) < 2:
+                continue
+            xs = [as_float(r.get("rna_mean_TPM", "0")) for r in per_stage]
+            total = [as_float(r.get("n_peaks", "0")) for r in per_stage]
+            promoter = [as_float(r.get("n_promoter_peaks", "0")) for r in per_stage]
+            stats = {
+                "pearson_total_peaks": pearson_corr(xs, total),
+                "spearman_total_peaks": spearman_corr(xs, total),
+                "pearson_promoter_peaks": pearson_corr(xs, promoter),
+                "spearman_promoter_peaks": spearman_corr(xs, promoter),
+            }
+            valid_stats = {k: v for k, v in stats.items() if v is not None}
+            if valid_stats:
+                best_key, best_value = max(valid_stats.items(), key=lambda x: abs(x[1]))
+                best_signal = best_key
+                max_abs = abs(best_value)
+                direction = "positive" if best_value > 0 else "negative" if best_value < 0 else "zero"
+                note = "low_stage_count" if len(per_stage) < 3 else ""
+            else:
+                best_signal = ""
+                max_abs = None
+                direction = ""
+                note = "constant_expression_or_chip_signal"
+            corr_rows.append(
+                {
+                    "gene_id": gid,
+                    "gene_name": meta.get("gene_name", gid),
+                    "is_epigenetic_machinery": meta.get("is_epigenetic_machinery", "false"),
+                    "machinery_group": meta.get("machinery_group", ""),
+                    "functional_annotation": meta.get("functional_annotation", ""),
+                    "candidate_score": meta.get("candidate_score", ""),
+                    "integrative_class": meta.get("integrative_class", ""),
+                    "representative_deg_status": meta.get("representative_deg_status", ""),
+                    "wgcna_hit": meta.get("wgcna_hit", "false"),
+                    "mfuzz_hit": meta.get("mfuzz_hit", "false"),
+                    "dtu_hit": meta.get("dtu_hit", "false"),
+                    "splicing_hit": meta.get("splicing_hit", "false"),
+                    "mark_or_factor": mark,
+                    "n_stage_points": len(per_stage),
+                    "stages": ";".join(str(r["stage_or_condition"]) for r in per_stage),
+                    "mean_rna_TPM": fmt_float(statistics.mean(xs)),
+                    "mean_total_peaks": fmt_float(statistics.mean(total)),
+                    "mean_promoter_peaks": fmt_float(statistics.mean(promoter)),
+                    "pearson_rna_vs_total_peaks": fmt_float(stats["pearson_total_peaks"]),
+                    "spearman_rna_vs_total_peaks": fmt_float(stats["spearman_total_peaks"]),
+                    "pearson_rna_vs_promoter_peaks": fmt_float(stats["pearson_promoter_peaks"]),
+                    "spearman_rna_vs_promoter_peaks": fmt_float(stats["spearman_promoter_peaks"]),
+                    "max_abs_correlation": fmt_float(max_abs),
+                    "best_signal": best_signal,
+                    "correlation_direction": direction,
+                    "correlation_note": note,
+                    "stage_values": ";".join(
+                        f"{r['stage_or_condition']}:TPM={r['rna_mean_TPM']},peaks={r['n_peaks']},promoter={r['n_promoter_peaks']}"
+                        for r in per_stage
+                    ),
+                }
+            )
+    corr_rows.sort(
+        key=lambda r: (
+            -as_float(r.get("max_abs_correlation", "0")),
+            -as_float(r.get("candidate_score", "0")),
+            str(r.get("gene_id", "")),
+            str(r.get("mark_or_factor", "")),
+        )
+    )
+    write_table(outdir("080-candidate-scoring") / "gene_mark_stage_signal_matrix.tsv", signal_rows, signal_header)
+    write_table(outdir("080-candidate-scoring") / "gene_mark_stage_correlations.tsv", corr_rows, corr_header)
+
+
 def integration_class(deg_status: str, chip: dict[str, str]) -> str:
     total = as_int(chip.get("total_associated_peaks", "0"))
     promoter = as_int(chip.get("promoter_peaks", "0"))
@@ -1552,6 +2021,8 @@ def command_score(_args: argparse.Namespace) -> None:
         or r.get("splicing_hit", "").lower() == "true"
     ]
     write_table(outdir("080-candidate-scoring") / "candidate_regulators.tsv", regulator_rows, header)
+    write_mark_enrichment_tests(scored, evidence_rows)
+    write_gene_mark_stage_correlations(scored, evidence_rows)
 
 
 def command_visualize(_args: argparse.Namespace) -> None:
@@ -1620,6 +2091,8 @@ def command_report(_args: argparse.Namespace) -> None:
     _h, gene_mark_evidence = read_table(str(outdir("080-candidate-scoring") / "ranked_gene_mark_stage_evidence.tsv"))
     _h, stage_mark_comparison = read_table(str(outdir("080-candidate-scoring") / "stage_mark_comparison.tsv"))
     _h, candidate_regulators = read_table(str(outdir("080-candidate-scoring") / "candidate_regulators.tsv"))
+    _h, mark_enrichment = read_table(str(outdir("080-candidate-scoring") / "mark_enrichment_tests.tsv"))
+    _h, gene_mark_correlations = read_table(str(outdir("080-candidate-scoring") / "gene_mark_stage_correlations.tsv"))
     _h, epi_catalog = read_table(str(outdir("030-id-harmonization") / "epigenetic_machinery_catalog.tsv"))
     _h, figure_manifest = read_table(str(outdir("090-visualizations") / "visualization_manifest.tsv"))
     _h, gene_panels = read_table(str(outdir("090-visualizations") / "gene_panel_index.tsv"))
@@ -1643,6 +2116,8 @@ def command_report(_args: argparse.Namespace) -> None:
             f"- Epigenetic machinery genes in catalog: {len(epi_catalog)}",
             f"- ChIP mark/stage metadata combinations: {len(mark_stage)}",
             f"- Gene-mark-stage links from annotated peaks: {len(gene_mark)}",
+            f"- Formal mark enrichment tests: {len(mark_enrichment)}",
+            f"- Gene-mark RNA/ChIP stage correlations: {len(gene_mark_correlations)}",
             "",
         ]
     )
@@ -1672,6 +2147,9 @@ def command_report(_args: argparse.Namespace) -> None:
             "- `080-candidate-scoring/ranked_gene_mark_stage_evidence.tsv`: ranked gene-mark-stage associations with RNA, WGCNA, Mfuzz, DTU, and splicing evidence.",
             "- `080-candidate-scoring/stage_mark_comparison.tsv`: stage-by-mark comparison table.",
             "- `080-candidate-scoring/candidate_regulators.tsv`: high-priority regulators supported by epigenetic machinery or RNA network/isoform evidence.",
+            "- `080-candidate-scoring/mark_enrichment_tests.tsv`: formal mark enrichment tests in DEG and epigenetic machinery gene sets.",
+            "- `080-candidate-scoring/gene_mark_stage_correlations.tsv`: stage-by-stage RNA expression versus ChIP evidence correlations by gene and mark.",
+            "- `080-candidate-scoring/gene_mark_stage_signal_matrix.tsv`: long RNA/ChIP signal matrix used for the correlations.",
             "- `090-visualizations/gene_panel_index.tsv`: index of gene-specific RNA + ChIP figure panels.",
             "",
             "## Limitations",
@@ -1686,6 +2164,8 @@ def command_report(_args: argparse.Namespace) -> None:
             "- 040-peak-gene-mapping/peak_to_gene.tsv",
             "- 070-integrated-tables/integrated_gene_table.tsv",
             "- 080-candidate-scoring/candidate_gene_scores.tsv",
+            "- 080-candidate-scoring/mark_enrichment_tests.tsv",
+            "- 080-candidate-scoring/gene_mark_stage_correlations.tsv",
             "- 090-visualizations/gene_panel_index.tsv",
             "- 090-visualizations/visualization_manifest.tsv",
             "- 100-functional-analysis/functional_enrichment.tsv",
@@ -1784,6 +2264,8 @@ def command_report(_args: argparse.Namespace) -> None:
       <div class="metric"><span>Epigenetic machinery catalog entries</span><strong>{len(epi_catalog)}</strong></div>
       <div class="metric"><span>ChIP mark/stage combinations</span><strong>{len(mark_stage)}</strong></div>
       <div class="metric"><span>Gene-mark-stage links</span><strong>{len(gene_mark)}</strong></div>
+      <div class="metric"><span>Mark enrichment tests</span><strong>{len(mark_enrichment)}</strong></div>
+      <div class="metric"><span>RNA/ChIP correlations</span><strong>{len(gene_mark_correlations)}</strong></div>
     </section>
     <section>
       <h2>Figures</h2>
@@ -1819,6 +2301,14 @@ def command_report(_args: argparse.Namespace) -> None:
       {table_html(stage_mark_comparison, ["stage_or_condition", "mark_or_factor", "n_linked_genes", "n_deg_linked_genes", "n_epigenetic_machinery_genes", "n_wgcna_hits", "n_mfuzz_hits", "n_dtu_hits", "n_splicing_hits", "mean_candidate_score"], 40)}
     </section>
     <section>
+      <h2>Formal Mark Enrichment</h2>
+      {table_html(mark_enrichment, ["target_set", "feature_scope", "mark_or_factor", "stage_or_condition", "target_genes", "marked_genes", "overlap_genes", "fold_enrichment", "odds_ratio", "p_value", "q_value", "top_overlap_genes"], 40)}
+    </section>
+    <section>
+      <h2>RNA-ChIP Stage Correlations</h2>
+      {table_html(gene_mark_correlations, ["gene_id", "gene_name", "mark_or_factor", "n_stage_points", "max_abs_correlation", "best_signal", "correlation_direction", "candidate_score", "machinery_group", "stage_values"], 40)}
+    </section>
+    <section>
       <h2>Ranked Gene-Mark-Stage Evidence</h2>
       {table_html(gene_mark_evidence or gene_mark, ["candidate_score", "gene_id", "gene_name", "mark_or_factor", "stage_or_condition", "n_peaks", "n_promoter_peaks", "representative_deg_status", "is_epigenetic_machinery", "machinery_group", "wgcna_hit", "mfuzz_hit", "dtu_hit", "splicing_hit"], 30)}
       <p class="muted">This table is the main answer: each row links one gene to one mark and stage, then adds expression and RNA evidence.</p>
@@ -1832,6 +2322,8 @@ def command_report(_args: argparse.Namespace) -> None:
       <p><code>070-integrated-tables/gene_mark_stage_summary.tsv</code> answers the central gene-mark-stage question.</p>
       <p><code>080-candidate-scoring/ranked_gene_mark_stage_evidence.tsv</code> ranks those gene-mark-stage associations with RNA, ChIP, WGCNA, Mfuzz, DTU, and splicing evidence.</p>
       <p><code>080-candidate-scoring/stage_mark_comparison.tsv</code> compares marks across life-cycle stages.</p>
+      <p><code>080-candidate-scoring/mark_enrichment_tests.tsv</code> tests whether marks are enriched in DEG or epigenetic machinery genes.</p>
+      <p><code>080-candidate-scoring/gene_mark_stage_correlations.tsv</code> correlates RNA expression and ChIP evidence across assayed stages for each gene-mark pair.</p>
       <p><code>080-candidate-scoring/candidate_gene_scores.tsv</code> ranks potential regulators of parasite plasticity.</p>
       <p><code>050-rnaseq-summary/rna_sample_group_mapping.tsv</code> diagnoses RNA sample-to-stage mapping for gene panels.</p>
       <p><code>030-id-harmonization/epigenetic_machinery_catalog.tsv</code> consolidates the S. mansoni epigenetic machinery catalog.</p>

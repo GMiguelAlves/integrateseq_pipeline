@@ -178,8 +178,13 @@ Key outputs are:
 - `080-candidate-scoring/ranked_gene_mark_stage_evidence.tsv`
 - `080-candidate-scoring/stage_mark_comparison.tsv`
 - `080-candidate-scoring/candidate_regulators.tsv`
+- `080-candidate-scoring/mark_enrichment_tests.tsv`
+- `080-candidate-scoring/gene_mark_stage_signal_matrix.tsv`
+- `080-candidate-scoring/gene_mark_stage_correlations.tsv`
 - `090-visualizations/gene_position_mark_map.png`
 - `090-visualizations/stage_mark_integrated_evidence.png`
+- `090-visualizations/mark_enrichment_tests.png`
+- `090-visualizations/gene_mark_stage_correlations.png`
 - `090-visualizations/gene_panels/<gene_id>_gene_panel.png`
 - `090-visualizations/gene_panel_index.tsv`
 - `090-visualizations/visualization_manifest.tsv`
@@ -192,12 +197,19 @@ coordinates, relative position to the TSS when available, and RNA evidence.
 DTU, splicing, epigenetic machinery class, and functional annotation fields.
 `stage_mark_comparison.tsv` summarizes those links by life-cycle stage and
 epigenetic mark.
+`mark_enrichment_tests.tsv` formally tests whether ChIP marks are enriched in
+DEGs and epigenetic machinery genes, separately for any linked peak and promoter
+peaks. `gene_mark_stage_signal_matrix.tsv` and
+`gene_mark_stage_correlations.tsv` correlate mean RNA expression with linked
+ChIP evidence by gene and mark across assayed stages; zeros are included only
+when a mark was assayed in that stage and no linked peak was found.
 Peak files whose names indicate pooled/global calls, such as `all`, are labeled
 as `all_stages`; truly unresolved ChIP labels remain `unknown_ChIP` or
 `unknown`.
 The visualization step also creates gene-specific RNA + ChIP panels for the
 top `GENE_PANEL_TOP_N` linked candidates. Set `GENE_PANEL_GENES` to a
 comma-separated list of gene IDs to force specific genes into this panel set.
+Set `GENE_PANEL_TOP_N=0` to skip those per-gene panels during quick test runs.
 In those panels, detailed RNA contexts are collapsed to canonical life-cycle
 stages so expression, ChIP mark, and peak-position evidence can be compared in
 one readable view.

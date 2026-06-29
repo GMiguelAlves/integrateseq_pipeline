@@ -389,6 +389,8 @@ gene_mark_summary <- read_tsv(file.path(project_dir, "070-integrated-tables", "g
 gene_mark_links <- read_tsv(file.path(project_dir, "070-integrated-tables", "gene_mark_stage_links.tsv"))
 stage_mark_comparison <- read_tsv(file.path(project_dir, "080-candidate-scoring", "stage_mark_comparison.tsv"))
 gene_mark_evidence <- read_tsv(file.path(project_dir, "080-candidate-scoring", "ranked_gene_mark_stage_evidence.tsv"))
+mark_enrichment <- read_tsv(file.path(project_dir, "080-candidate-scoring", "mark_enrichment_tests.tsv"))
+gene_mark_correlations <- read_tsv(file.path(project_dir, "080-candidate-scoring", "gene_mark_stage_correlations.tsv"))
 
 if (nrow(class_counts) > 0 && all(c("integrative_class", "n_genes") %in% names(class_counts))) {
   class_counts$n_genes <- as_num(class_counts$n_genes)
@@ -506,9 +508,103 @@ if (nrow(stage_mark_comparison) > 0 && all(c("mark_or_factor", "stage_or_conditi
 }
 save_plot(p, "stage_mark_integrated_evidence", 10.5, 6.2)
 
+if (nrow(mark_enrichment) > 0 && all(c("target_set", "feature_scope", "mark_or_factor", "stage_or_condition") %in% names(mark_enrichment))) {
+  enrich <- mark_enrichment
+  enrich$mark_or_factor <- canonical_mark(safe_col(enrich, "mark_or_factor", "unknown"))
+  raw_enrichment_stage <- clean_text(safe_col(enrich, "stage_or_condition", "unknown"))
+  enrich$stage_or_condition <- canonical_stage(raw_enrichment_stage)
+  enrich$stage_or_condition[raw_enrichment_stage == "all_observed_stages"] <- "all_observed_stages"
+  enrich$feature_scope <- clean_text(safe_col(enrich, "feature_scope", "any_peak"))
+  enrich$target_set <- clean_text(safe_col(enrich, "target_set", "target"))
+  enrich$q_value <- as_num(safe_col(enrich, "q_value", 1))
+  enrich$p_value <- as_num(safe_col(enrich, "p_value", 1))
+  enrich$fold_enrichment <- as_num(safe_col(enrich, "fold_enrichment", 0))
+  enrich$overlap_genes <- as_num(safe_col(enrich, "overlap_genes", 0))
+  enrich <- enrich[!is.na(enrich$p_value) & enrich$overlap_genes > 0, , drop = FALSE]
+  if (nrow(enrich) > 0) {
+    enrich$score <- -log10(pmax(enrich$q_value, 1e-300))
+    if (all(enrich$score == 0 | is.na(enrich$score))) {
+      enrich$score <- -log10(pmax(enrich$p_value, 1e-300))
+    }
+    enrich$plot_label <- paste(enrich$target_set, enrich$feature_scope, enrich$mark_or_factor, enrich$stage_or_condition, sep = " | ")
+    enrich <- enrich[order(-enrich$score, -enrich$fold_enrichment, -enrich$overlap_genes), , drop = FALSE]
+    enrich <- head(enrich, 30)
+    enrich$plot_label <- factor(enrich$plot_label, levels = rev(enrich$plot_label))
+    p <- ggplot(enrich, aes(x = plot_label, y = score, fill = target_set)) +
+      geom_col(width = 0.72) +
+      geom_text(aes(label = paste0("n=", overlap_genes, "; FE=", round(fold_enrichment, 2))), hjust = -0.04, size = 2.7, color = "#111827") +
+      coord_flip(clip = "off") +
+      scale_fill_manual(values = c("#2563eb", "#16a34a", "#f59e0b", "#dc2626")) +
+      labs(
+        title = "Formal mark enrichment tests",
+        subtitle = "DEG and epigenetic machinery gene sets tested against linked ChIP marks.",
+        x = NULL,
+        y = "-log10 adjusted p-value",
+        fill = "Target set"
+      ) +
+      theme_integrative() +
+      theme(plot.margin = margin(10, 70, 10, 10))
+  } else {
+    p <- empty_plot("Formal mark enrichment tests", "No DEG or machinery overlap with linked marks was available.")
+  }
+} else {
+  p <- empty_plot("Formal mark enrichment tests", "Run the score step to create mark_enrichment_tests.tsv.")
+}
+save_plot(p, "mark_enrichment_tests", 11, 7)
+
+if (nrow(gene_mark_correlations) > 0 && all(c("gene_id", "mark_or_factor", "max_abs_correlation") %in% names(gene_mark_correlations))) {
+  corr <- gene_mark_correlations
+  corr$max_abs_correlation <- as_num(safe_col(corr, "max_abs_correlation", NA))
+  corr$n_stage_points <- as_num(safe_col(corr, "n_stage_points", 0))
+  corr$mark_or_factor <- canonical_mark(safe_col(corr, "mark_or_factor", "unknown"))
+  corr$correlation_direction <- clean_text(safe_col(corr, "correlation_direction", "unknown"))
+  corr <- corr[!is.na(corr$max_abs_correlation) & corr$n_stage_points >= 2, , drop = FALSE]
+  if (nrow(corr) > 0) {
+    corr$gene_label <- trim_label(ifelse(safe_col(corr, "gene_name") != "" & safe_col(corr, "gene_name") != safe_col(corr, "gene_id"), paste0(safe_col(corr, "gene_name"), " (", safe_col(corr, "gene_id"), ")"), safe_col(corr, "gene_id")), 34)
+    corr$plot_label <- paste(corr$gene_label, corr$mark_or_factor, sep = " | ")
+    corr <- corr[order(-corr$max_abs_correlation, -as_num(safe_col(corr, "candidate_score", 0))), , drop = FALSE]
+    corr <- head(corr, 30)
+    corr$plot_label <- factor(corr$plot_label, levels = rev(corr$plot_label))
+    p <- ggplot(corr, aes(x = plot_label, y = max_abs_correlation, fill = correlation_direction)) +
+      geom_col(width = 0.72) +
+      geom_text(aes(label = paste0("stages=", n_stage_points)), hjust = -0.06, size = 2.8, color = "#111827") +
+      coord_flip(clip = "off") +
+      scale_fill_manual(values = c("positive" = "#16a34a", "negative" = "#dc2626", "zero" = "#64748b", "unknown" = "#94a3b8"), drop = FALSE) +
+      ylim(0, min(1.08, max(corr$max_abs_correlation, na.rm = TRUE) + 0.12)) +
+      labs(
+        title = "RNA-ChIP stage correlations",
+        subtitle = "Per gene-mark pair; zeros are included only for stages where that mark was assayed.",
+        x = NULL,
+        y = "Maximum absolute correlation",
+        fill = "Direction"
+      ) +
+      theme_integrative() +
+      theme(plot.margin = margin(10, 70, 10, 10))
+  } else {
+    p <- empty_plot("RNA-ChIP stage correlations", "No gene-mark pairs had at least two assayed stages with RNA expression.")
+  }
+} else {
+  p <- empty_plot("RNA-ChIP stage correlations", "Run the score step to create gene_mark_stage_correlations.tsv.")
+}
+save_plot(p, "gene_mark_stage_correlations", 10.5, 7)
+
 if (nrow(gene_mark_links) > 0) {
   links <- gene_mark_links
   links$gene_id <- safe_col(links, "gene_id", "")
+
+  keep_ids <- character()
+  if (nrow(candidate_scores) > 0 && all(c("gene_id", "candidate_score") %in% names(candidate_scores))) {
+    candidate_scores$candidate_score <- as_num(candidate_scores$candidate_score)
+    ranked_ids <- candidate_scores$gene_id[order(-candidate_scores$candidate_score)]
+    keep_ids <- ranked_ids[ranked_ids %in% unique(links$gene_id)]
+  }
+  if (length(keep_ids) == 0) {
+    gene_counts <- sort(table(links$gene_id), decreasing = TRUE)
+    keep_ids <- names(gene_counts)
+  }
+  keep_ids <- head(keep_ids, 14)
+  links <- links[links$gene_id %in% keep_ids, , drop = FALSE]
+
   links$mark_or_factor <- canonical_mark(safe_col(links, "mark_or_factor", "unknown"))
   links$stage_or_condition <- canonical_stage(safe_col(links, "stage_or_condition", "unknown"))
   links$promoter_flag <- safe_col(links, "promoter_flag", "false")
@@ -527,19 +623,6 @@ if (nrow(gene_mark_links) > 0) {
     safe_col(links, "gene_id")
   )
   links$gene_label <- trim_label(links$gene_label, 38)
-
-  keep_ids <- character()
-  if (nrow(candidate_scores) > 0 && all(c("gene_id", "candidate_score") %in% names(candidate_scores))) {
-    candidate_scores$candidate_score <- as_num(candidate_scores$candidate_score)
-    ranked_ids <- candidate_scores$gene_id[order(-candidate_scores$candidate_score)]
-    keep_ids <- ranked_ids[ranked_ids %in% unique(links$gene_id)]
-  }
-  if (length(keep_ids) == 0) {
-    gene_counts <- sort(table(links$gene_id), decreasing = TRUE)
-    keep_ids <- names(gene_counts)
-  }
-  keep_ids <- head(keep_ids, 14)
-  links <- links[links$gene_id %in% keep_ids, , drop = FALSE]
 
   label_by_gene <- links[!duplicated(links$gene_id), c("gene_id", "gene_label"), drop = FALSE]
   ordered_labels <- label_by_gene$gene_label[match(keep_ids, label_by_gene$gene_id)]
@@ -590,9 +673,10 @@ if (nrow(gene_mark_links) > 0) {
 save_plot(p, "gene_position_mark_map", 12, 6.8)
 
 gene_panel_top_n <- suppressWarnings(as.integer(Sys.getenv("GENE_PANEL_TOP_N", "12")))
-if (is.na(gene_panel_top_n) || gene_panel_top_n < 1) {
+if (is.na(gene_panel_top_n)) {
   gene_panel_top_n <- 12
 }
+gene_panel_top_n <- max(0, gene_panel_top_n)
 explicit_genes <- unlist(strsplit(Sys.getenv("GENE_PANEL_GENES", ""), "[,;[:space:]]+"))
 explicit_genes <- explicit_genes[explicit_genes != ""]
 panel_genes <- character()
