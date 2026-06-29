@@ -24,17 +24,15 @@ Options:
                          Steps: validate, prepare, harmonize, map-peaks,
                                 summarize-rna, summarize-chip, integrate,
                                 score, visualize, functional, report
-  --dry-run              Print local commands or Slurm submissions
+  --dry-run              Print shell commands or Slurm submissions
   --resume               Skip steps with .done files (default)
   --force                Re-run steps even when .done files exist
   --mode MODE            Override RUN_MODE: slurm or local
-  --local                Shortcut for --mode local
   --slurm                Shortcut for --mode slurm
   -h, --help             Show this help
 
 Examples:
   bash integrative_pipeline.sh --all --dry-run
-  bash integrative_pipeline.sh --all --local
   bash integrative_pipeline.sh --step validate --step harmonize
 USAGE
 }
@@ -68,10 +66,6 @@ while [[ "$#" -gt 0 ]]; do
     --mode)
       RUN_MODE_OVERRIDE="$2"
       shift 2
-      ;;
-    --local)
-      RUN_MODE_OVERRIDE="local"
-      shift
       ;;
     --slurm)
       RUN_MODE_OVERRIDE="slurm"
@@ -225,7 +219,7 @@ submit_step() {
     return 0
   fi
 
-  command -v sbatch >/dev/null 2>&1 || die "sbatch not found; use --local or --dry-run on non-Slurm systems"
+  command -v sbatch >/dev/null 2>&1 || die "sbatch not found; use --mode local or --dry-run on non-Slurm systems"
   local -a sbatch_args=(
     --parsable
     --job-name="integrateseq_${step}"
