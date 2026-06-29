@@ -212,6 +212,10 @@ comma-separated list of gene IDs to force specific genes into this panel set.
 Set `GENE_PANEL_TOP_N=0` to skip those per-gene panels during quick test runs.
 Use `GENE_PANEL_WIDTH` and `GENE_PANEL_HEIGHT` to make the generated panels
 larger when preparing final figures.
+The global `gene_position_mark_map.png` uses a separate limit:
+`GENE_POSITION_MAP_TOP_N` controls how many ranked genes appear in that overview
+plot. Use `GENE_POSITION_MAP_WIDTH` and `GENE_POSITION_MAP_HEIGHT` when many
+genes are shown and the map needs more space.
 In those panels, detailed RNA contexts are collapsed to canonical life-cycle
 stages so expression, ChIP mark, and peak-position evidence can be compared in
 one readable view.

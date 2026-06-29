@@ -613,6 +613,20 @@ if (nrow(gene_mark_correlations) > 0 && all(c("gene_id", "mark_or_factor", "max_
 }
 save_plot(p, "gene_mark_stage_correlations", 10.5, 7)
 
+gene_position_map_top_n <- suppressWarnings(as.integer(Sys.getenv("GENE_POSITION_MAP_TOP_N", "14")))
+if (is.na(gene_position_map_top_n) || gene_position_map_top_n < 1) {
+  gene_position_map_top_n <- 14
+}
+gene_position_map_width <- suppressWarnings(as.numeric(Sys.getenv("GENE_POSITION_MAP_WIDTH", "12")))
+if (is.na(gene_position_map_width) || gene_position_map_width <= 0) {
+  gene_position_map_width <- 12
+}
+gene_position_map_height <- suppressWarnings(as.numeric(Sys.getenv("GENE_POSITION_MAP_HEIGHT", "")))
+gene_position_map_render_height <- gene_position_map_height
+if (is.na(gene_position_map_render_height) || gene_position_map_render_height <= 0) {
+  gene_position_map_render_height <- 6.8
+}
+
 if (nrow(gene_mark_links) > 0) {
   links <- gene_mark_links
   links$gene_id <- safe_col(links, "gene_id", "")
@@ -627,7 +641,7 @@ if (nrow(gene_mark_links) > 0) {
     gene_counts <- sort(table(links$gene_id), decreasing = TRUE)
     keep_ids <- names(gene_counts)
   }
-  keep_ids <- head(keep_ids, 14)
+  keep_ids <- head(keep_ids, gene_position_map_top_n)
   links <- links[links$gene_id %in% keep_ids, , drop = FALSE]
 
   links$mark_or_factor <- canonical_mark(safe_col(links, "mark_or_factor", "unknown"))
@@ -674,6 +688,10 @@ if (nrow(gene_mark_links) > 0) {
   names(plot_df)[names(plot_df) == "peak_id"] <- "n_peaks"
 
   if (nrow(plot_df) > 0) {
+    shown_gene_count <- length(unique(as.character(plot_df$gene_label)))
+    if (is.na(gene_position_map_height) || gene_position_map_height <= 0) {
+      gene_position_map_render_height <- max(6.8, min(18, 3.8 + 0.28 * shown_gene_count))
+    }
     p <- ggplot(plot_df, aes(x = position_class, y = gene_label, color = mark_or_factor)) +
       geom_point(aes(size = n_peaks, shape = promoter_flag), alpha = 0.86, position = position_jitter(width = 0.08, height = 0.08)) +
       facet_wrap(~stage_or_condition, nrow = 1) +
@@ -681,7 +699,7 @@ if (nrow(gene_mark_links) > 0) {
       scale_size_continuous(range = c(2, 7), breaks = c(1, 5, 20, 100), name = "Peaks") +
       labs(
         title = "Gene-position-mark associations",
-        subtitle = "Top candidate genes; x = peak position class, color = epigenetic mark.",
+        subtitle = paste0("Top ", shown_gene_count, " candidate genes; x = peak position class, color = epigenetic mark."),
         x = "Peak position class",
         y = "Gene",
         color = "Mark",
@@ -695,7 +713,7 @@ if (nrow(gene_mark_links) > 0) {
 } else {
   p <- empty_plot("Gene-position-mark associations", "Run integration after peak-gene mapping to populate this figure.")
 }
-save_plot(p, "gene_position_mark_map", 12, 6.8)
+save_plot(p, "gene_position_mark_map", gene_position_map_width, gene_position_map_render_height)
 
 gene_panel_top_n <- suppressWarnings(as.integer(Sys.getenv("GENE_PANEL_TOP_N", "12")))
 if (is.na(gene_panel_top_n)) {
