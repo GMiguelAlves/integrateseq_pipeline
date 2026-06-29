@@ -70,6 +70,99 @@ safe_filename <- function(x) {
   gsub("[^A-Za-z0-9_.-]+", "_", as.character(x))
 }
 
+stage_order <- c("adult", "cercariae", "miracidia", "schistosomula", "sporocysts", "all_stages", "unknown")
+
+clean_text <- function(x, default = "unknown") {
+  if (length(x) == 0) {
+    return(character())
+  }
+  y <- trimws(as.character(x))
+  missing <- is.na(y)
+  present <- !missing
+  missing[present] <- y[present] == "" | tolower(y[present]) %in% c("na", "n/a", "nan", "none", "null", "not_available")
+  y[missing] <- default
+  y
+}
+
+canonical_stage_one <- function(x) {
+  y <- clean_text(x, "unknown")
+  raw <- tolower(y)
+  tokens <- unlist(strsplit(gsub("[^a-z0-9]+", " ", raw), "\\s+"))
+  tokens <- tokens[tokens != ""]
+  if (length(tokens) == 0 || raw %in% c("unknown", "na", "n/a")) {
+    return("unknown")
+  }
+  if (grepl("all[_ -]?stages|all[_ -]?projects|pooled|combined", raw) || any(tokens %in% c("all", "allstage", "allstages"))) {
+    return("all_stages")
+  }
+  if (any(grepl("adult", tokens))) {
+    return("adult")
+  }
+  if (any(grepl("cercar", tokens))) {
+    return("cercariae")
+  }
+  if (any(grepl("miracid", tokens))) {
+    return("miracidia")
+  }
+  if (any(grepl("schistosomul", tokens))) {
+    return("schistosomula")
+  }
+  if (any(grepl("sporocyst", tokens))) {
+    return("sporocysts")
+  }
+  "unknown"
+}
+
+canonical_stage <- function(x) {
+  vapply(x, canonical_stage_one, character(1), USE.NAMES = FALSE)
+}
+
+stage_factor <- function(x) {
+  x <- canonical_stage(x)
+  factor(x, levels = unique(c(stage_order, x)))
+}
+
+canonical_mark_one <- function(x) {
+  y <- clean_text(x, "unknown")
+  lower <- tolower(y)
+  known_marks <- c("H3K27me3", "H3K4me3", "H3K9ac", "H3K9me3")
+  for (mark in known_marks) {
+    if (grepl(tolower(mark), lower, fixed = TRUE)) {
+      return(mark)
+    }
+  }
+  if (grepl("unknown", lower) || lower == "chip") {
+    return("unknown_ChIP")
+  }
+  y <- sub("__all\\.tsv(\\.gz)?$", "", y, ignore.case = TRUE)
+  y <- sub("\\.tsv(\\.gz)?$", "", y, ignore.case = TRUE)
+  y
+}
+
+canonical_mark <- function(x) {
+  vapply(x, canonical_mark_one, character(1), USE.NAMES = FALSE)
+}
+
+collapse_expression_by_stage <- function(expr) {
+  if (nrow(expr) == 0) {
+    return(expr)
+  }
+  expr$stage_or_condition <- canonical_stage(safe_col(expr, "stage_or_condition", safe_col(expr, "context", "unknown")))
+  expr$mean_TPM <- as_num(safe_col(expr, "mean_TPM", safe_col(expr, "mean_expression", 0)))
+  expr$n_samples <- as_num(safe_col(expr, "n_samples", 1))
+  expr$n_samples[is.na(expr$n_samples) | expr$n_samples <= 0] <- 1
+  expr <- expr[!is.na(expr$mean_TPM), , drop = FALSE]
+  if (nrow(expr) == 0) {
+    return(expr)
+  }
+  expr$weighted_TPM <- expr$mean_TPM * expr$n_samples
+  collapsed <- aggregate(cbind(weighted_TPM, n_samples) ~ stage_or_condition, expr, sum, na.rm = TRUE)
+  collapsed$mean_TPM <- collapsed$weighted_TPM / collapsed$n_samples
+  collapsed$mean_log2TPM <- log2(collapsed$mean_TPM + 1)
+  collapsed$stage_or_condition <- factor(collapsed$stage_or_condition, levels = unique(c(stage_order, collapsed$stage_or_condition)))
+  collapsed
+}
+
 save_plot <- function(plot, stem, width = 8, height = 5) {
   outputs <- c("png", "pdf", "svg")
   for (ext in outputs) {
@@ -127,26 +220,25 @@ save_gene_panel <- function(gid, width = 11, height = 10) {
   group <- if (nrow(score_row) > 0 && "machinery_group" %in% names(score_row)) score_row$machinery_group[[1]] else ""
   title <- paste0(gene_label, " | score=", score, " | ", klass, ifelse(group != "", paste0(" | ", group), ""))
 
-  stage_order <- c("adult", "cercariae", "miracidia", "schistosomula", "sporocysts", "all_stages", "unknown")
   if (nrow(expr) > 0) {
-    expr$stage_or_condition <- safe_col(expr, "stage_or_condition", safe_col(expr, "context", "unknown"))
-    expr$mean_TPM <- as_num(safe_col(expr, "mean_TPM", safe_col(expr, "mean_expression", 0)))
-    expr$mean_log2TPM <- as_num(safe_col(expr, "mean_log2TPM", log2(expr$mean_TPM + 1)))
-    expr <- expr[!is.na(expr$mean_TPM), , drop = FALSE]
-    expr$stage_or_condition <- factor(expr$stage_or_condition, levels = unique(c(stage_order, expr$stage_or_condition)))
-    p_expr <- ggplot(expr, aes(x = stage_or_condition, y = mean_TPM)) +
-      geom_col(fill = "#2563eb", width = 0.7) +
-      geom_point(aes(y = mean_TPM), color = "#111827", size = 1.8) +
-      labs(title = "RNA-seq expression", x = NULL, y = "Mean TPM") +
-      theme_integrative(10) +
-      theme(axis.text.x = element_text(angle = 30, hjust = 1), legend.position = "none")
+    expr <- collapse_expression_by_stage(expr)
+    if (nrow(expr) > 0) {
+      p_expr <- ggplot(expr, aes(x = stage_or_condition, y = mean_TPM)) +
+        geom_col(fill = "#2563eb", width = 0.7) +
+        geom_point(aes(y = mean_TPM), color = "#111827", size = 1.8) +
+        labs(title = "RNA-seq expression by life-cycle stage", x = NULL, y = "Mean TPM") +
+        theme_integrative(10) +
+        theme(axis.text.x = element_text(angle = 30, hjust = 1), legend.position = "none")
+    } else {
+      p_expr <- empty_plot("RNA-seq expression by life-cycle stage", "No numeric RNA-seq expression rows for this gene.")
+    }
   } else {
-    p_expr <- empty_plot("RNA-seq expression", "No expression-by-context rows for this gene.")
+    p_expr <- empty_plot("RNA-seq expression by life-cycle stage", "No expression-by-context rows for this gene.")
   }
 
   if (nrow(ev) > 0) {
-    ev$stage_or_condition <- factor(safe_col(ev, "stage_or_condition", "unknown"), levels = unique(c(stage_order, safe_col(ev, "stage_or_condition", "unknown"))))
-    ev$mark_or_factor <- safe_col(ev, "mark_or_factor", "unknown")
+    ev$stage_or_condition <- stage_factor(safe_col(ev, "stage_or_condition", "unknown"))
+    ev$mark_or_factor <- canonical_mark(safe_col(ev, "mark_or_factor", "unknown"))
     ev$n_peaks <- as_num(safe_col(ev, "n_peaks", 0))
     ev$n_promoter_peaks <- as_num(safe_col(ev, "n_promoter_peaks", 0))
     ev$promoter_fraction <- ifelse(ev$n_peaks > 0, ev$n_promoter_peaks / ev$n_peaks, 0)
@@ -162,8 +254,8 @@ save_gene_panel <- function(gid, width = 11, height = 10) {
   }
 
   if (nrow(links_g) > 0) {
-    links_g$stage_or_condition <- safe_col(links_g, "stage_or_condition", "unknown")
-    links_g$mark_or_factor <- safe_col(links_g, "mark_or_factor", "unknown")
+    links_g$stage_or_condition <- canonical_stage(safe_col(links_g, "stage_or_condition", "unknown"))
+    links_g$mark_or_factor <- canonical_mark(safe_col(links_g, "mark_or_factor", "unknown"))
     links_g$promoter_flag <- safe_col(links_g, "promoter_flag", "false")
     loc <- tolower(safe_col(links_g, "peak_location", ""))
     links_g$position_class <- ifelse(
@@ -181,6 +273,7 @@ save_gene_panel <- function(gid, width = 11, height = 10) {
       length
     )
     names(pos_df)[names(pos_df) == "peak_id"] <- "n_peaks"
+    pos_df$stage_or_condition <- factor(pos_df$stage_or_condition, levels = unique(c(stage_order, pos_df$stage_or_condition)))
     pos_df$position_class <- factor(pos_df$position_class, levels = c("promoter/TSS", "gene body", "distal/intergenic", "other/annotated"))
     p_pos <- ggplot(pos_df, aes(x = mark_or_factor, y = position_class, color = stage_or_condition)) +
       geom_point(aes(size = n_peaks), alpha = 0.85) +
@@ -345,10 +438,9 @@ plot_heatmap <- function(df, row_col, col_col, value_col, title, fill_label, emp
   } else {
     value <- rep(1, nrow(df))
   }
-  plot_df <- data.frame(row = df[[row_col]], col = df[[col_col]], value = value, stringsAsFactors = FALSE)
-  plot_df$row[plot_df$row == ""] <- "unknown"
-  plot_df$col[plot_df$col == ""] <- "unknown"
+  plot_df <- data.frame(row = canonical_mark(df[[row_col]]), col = canonical_stage(df[[col_col]]), value = value, stringsAsFactors = FALSE)
   plot_df <- aggregate(value ~ row + col, plot_df, sum, na.rm = TRUE)
+  plot_df$col <- factor(plot_df$col, levels = unique(c(stage_order, plot_df$col)))
   ggplot(plot_df, aes(x = col, y = row, fill = value)) +
     geom_tile(color = "white", linewidth = 0.6) +
     geom_text(aes(label = value), size = 3, color = "#111827") +
@@ -381,6 +473,8 @@ p <- plot_heatmap(
 save_plot(p, "gene_mark_stage_matrix", 8.5, 6)
 
 if (nrow(stage_mark_comparison) > 0 && all(c("mark_or_factor", "stage_or_condition") %in% names(stage_mark_comparison))) {
+  stage_mark_comparison$mark_or_factor <- canonical_mark(safe_col(stage_mark_comparison, "mark_or_factor", "unknown"))
+  stage_mark_comparison$stage_or_condition <- stage_factor(safe_col(stage_mark_comparison, "stage_or_condition", "unknown"))
   stage_mark_comparison$n_deg_linked_genes <- as_num(safe_col(stage_mark_comparison, "n_deg_linked_genes", 0))
   stage_mark_comparison$n_epigenetic_machinery_genes <- as_num(safe_col(stage_mark_comparison, "n_epigenetic_machinery_genes", 0))
   stage_mark_comparison$n_wgcna_hits <- as_num(safe_col(stage_mark_comparison, "n_wgcna_hits", 0))
@@ -412,8 +506,8 @@ save_plot(p, "stage_mark_integrated_evidence", 10.5, 6.2)
 if (nrow(gene_mark_links) > 0) {
   links <- gene_mark_links
   links$gene_id <- safe_col(links, "gene_id", "")
-  links$mark_or_factor <- safe_col(links, "mark_or_factor", "unknown")
-  links$stage_or_condition <- safe_col(links, "stage_or_condition", "unknown")
+  links$mark_or_factor <- canonical_mark(safe_col(links, "mark_or_factor", "unknown"))
+  links$stage_or_condition <- canonical_stage(safe_col(links, "stage_or_condition", "unknown"))
   links$promoter_flag <- safe_col(links, "promoter_flag", "false")
   links$peak_location <- safe_col(links, "peak_location", "")
   links$peak_chrom <- safe_col(links, "peak_chrom", "")
@@ -460,7 +554,6 @@ if (nrow(gene_mark_links) > 0) {
     )
   )
   links$position_class <- factor(links$position_class, levels = c("promoter/TSS", "gene body", "distal/intergenic", "other/annotated"))
-  stage_order <- c("adult", "cercariae", "miracidia", "schistosomula", "sporocysts", "all_stages", "unknown")
   links$stage_or_condition <- factor(links$stage_or_condition, levels = unique(c(stage_order, links$stage_or_condition)))
   plot_df <- aggregate(
     peak_id ~ gene_label + stage_or_condition + mark_or_factor + position_class + promoter_flag,

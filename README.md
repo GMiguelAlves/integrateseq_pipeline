@@ -84,19 +84,13 @@ Dry-run the full workflow:
 bash integrative_pipeline.sh --all --dry-run
 ```
 
-Run locally:
-
-```bash
-bash integrative_pipeline.sh --all --local
-```
-
 Run selected steps:
 
 ```bash
-bash integrative_pipeline.sh --step validate --step prepare --step harmonize --local
+bash integrative_pipeline.sh --step validate --step prepare --step harmonize
 ```
 
-Run through Slurm, the default execution mode:
+Run the full workflow:
 
 ```bash
 bash integrative_pipeline.sh --all
@@ -203,6 +197,9 @@ as `all_stages`; truly unresolved ChIP labels remain `unknown_ChIP` or
 The visualization step also creates gene-specific RNA + ChIP panels for the
 top `GENE_PANEL_TOP_N` linked candidates. Set `GENE_PANEL_GENES` to a
 comma-separated list of gene IDs to force specific genes into this panel set.
+In those panels, detailed RNA contexts are collapsed to canonical life-cycle
+stages so expression, ChIP mark, and peak-position evidence can be compared in
+one readable view.
 
 ## Troubleshooting
 
