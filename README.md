@@ -173,6 +173,7 @@ Key outputs are:
 - `040-peak-gene-mapping/peak_to_gene.tsv`
 - `040-peak-gene-mapping/gene_to_peak_summary.tsv`
 - `050-rnaseq-summary/rna_gene_summary.tsv`
+- `050-rnaseq-summary/rna_expression_by_context.tsv`
 - `060-chipseq-summary/chip_gene_summary.tsv`
 - `070-integrated-tables/integrated_gene_table.tsv`
 - `070-integrated-tables/integrated_by_contrast.tsv`
@@ -184,6 +185,8 @@ Key outputs are:
 - `080-candidate-scoring/candidate_regulators.tsv`
 - `090-visualizations/gene_position_mark_map.png`
 - `090-visualizations/stage_mark_integrated_evidence.png`
+- `090-visualizations/gene_panels/<gene_id>_gene_panel.png`
+- `090-visualizations/gene_panel_index.tsv`
 - `090-visualizations/visualization_manifest.tsv`
 - `110-reports/integrative_report.html`
 
@@ -197,6 +200,9 @@ epigenetic mark.
 Peak files whose names indicate pooled/global calls, such as `all`, are labeled
 as `all_stages`; truly unresolved ChIP labels remain `unknown_ChIP` or
 `unknown`.
+The visualization step also creates gene-specific RNA + ChIP panels for the
+top `GENE_PANEL_TOP_N` linked candidates. Set `GENE_PANEL_GENES` to a
+comma-separated list of gene IDs to force specific genes into this panel set.
 
 ## Troubleshooting
 

@@ -726,6 +726,7 @@ def command_summarize_rna(_args: argparse.Namespace) -> None:
     for row in deg:
         by_gene_deg[row["gene_id"]].append(row)
     summaries = []
+    context_rows = []
     for row in rows:
         gid = row.get(gene_col, "")
         if not gid:
@@ -738,6 +739,18 @@ def command_summarize_rna(_args: argparse.Namespace) -> None:
             all_values.append(value)
         group_means = {g: (sum(v) / len(v) if v else 0.0) for g, v in values_by_group.items()}
         top_group = max(group_means, key=group_means.get) if group_means else ""
+        for group, values in sorted(values_by_group.items()):
+            mean_value = sum(values) / len(values) if values else 0.0
+            context_rows.append(
+                {
+                    "gene_id": gid,
+                    "stage_or_condition": group,
+                    "mean_TPM": f"{mean_value:.8g}",
+                    "mean_log2TPM": f"{math.log2(mean_value + 1):.8g}",
+                    "fraction_expressed": f"{(sum(v > 0 for v in values) / len(values)):.8g}" if values else "0",
+                    "n_samples": len(values),
+                }
+            )
         hits = by_gene_deg.get(gid, [])
         statuses = [h.get("deg_status", "not_significant") for h in hits]
         padjs = [as_float(h.get("padj"), 1.0) for h in hits if h.get("padj")]
@@ -779,6 +792,11 @@ def command_summarize_rna(_args: argparse.Namespace) -> None:
         "transcriptional_dynamism_score",
     ]
     write_table(outdir("050-rnaseq-summary") / "rna_gene_summary.tsv", summaries, sum_header)
+    write_table(
+        outdir("050-rnaseq-summary") / "rna_expression_by_context.tsv",
+        context_rows,
+        ["gene_id", "stage_or_condition", "mean_TPM", "mean_log2TPM", "fraction_expressed", "n_samples"],
+    )
     deg_header = ["contrast_id", "gene_id", "gene_name", "log2FoldChange", "pvalue", "padj", "deg_status"]
     write_table(outdir("050-rnaseq-summary") / "rna_deg_long.tsv", deg, deg_header + sorted({k for r in deg for k in r} - set(deg_header)))
 
@@ -920,9 +938,11 @@ def chip_metadata_mark_stage_rows() -> list[dict[str, object]]:
 def expression_context_lookup() -> dict[tuple[str, str], dict[str, str]]:
     header, rows = read_table(env("RNA_EXPRESSION_CONTEXT"))
     if not header:
+        header, rows = read_table(str(outdir("050-rnaseq-summary") / "rna_expression_by_context.tsv"))
+    if not header:
         return {}
     gene_col = first_col(header, ["gene_id", "matched_gene_id", "gene"])
-    stage_col = first_col(header, ["stage", "condition", "stage_class", "context"])
+    stage_col = first_col(header, ["stage", "condition", "stage_or_condition", "stage_class", "context"])
     lookup = {}
     for row in rows:
         gid = row.get(gene_col, "") if gene_col else ""
@@ -1456,6 +1476,7 @@ def command_report(_args: argparse.Namespace) -> None:
     _h, candidate_regulators = read_table(str(outdir("080-candidate-scoring") / "candidate_regulators.tsv"))
     _h, epi_catalog = read_table(str(outdir("030-id-harmonization") / "epigenetic_machinery_catalog.tsv"))
     _h, figure_manifest = read_table(str(outdir("090-visualizations") / "visualization_manifest.tsv"))
+    _h, gene_panels = read_table(str(outdir("090-visualizations") / "gene_panel_index.tsv"))
     n_genes = sum(as_int(r.get("n_genes", "0")) for r in classes)
     generated = dt.datetime.now().isoformat(timespec="seconds")
     md = [
@@ -1505,6 +1526,7 @@ def command_report(_args: argparse.Namespace) -> None:
             "- `080-candidate-scoring/ranked_gene_mark_stage_evidence.tsv`: ranked gene-mark-stage associations with RNA, WGCNA, Mfuzz, DTU, and splicing evidence.",
             "- `080-candidate-scoring/stage_mark_comparison.tsv`: stage-by-mark comparison table.",
             "- `080-candidate-scoring/candidate_regulators.tsv`: high-priority regulators supported by epigenetic machinery or RNA network/isoform evidence.",
+            "- `090-visualizations/gene_panel_index.tsv`: index of gene-specific RNA + ChIP figure panels.",
             "",
             "## Limitations",
             "",
@@ -1518,6 +1540,7 @@ def command_report(_args: argparse.Namespace) -> None:
             "- 040-peak-gene-mapping/peak_to_gene.tsv",
             "- 070-integrated-tables/integrated_gene_table.tsv",
             "- 080-candidate-scoring/candidate_gene_scores.tsv",
+            "- 090-visualizations/gene_panel_index.tsv",
             "- 090-visualizations/visualization_manifest.tsv",
             "- 100-functional-analysis/functional_enrichment.tsv",
         ]
@@ -1540,6 +1563,8 @@ def command_report(_args: argparse.Namespace) -> None:
     preferred = {}
     for row in figure_manifest:
         fig = row.get("figure", "")
+        if fig.startswith("gene_panels/"):
+            continue
         stem = str(Path(fig).with_suffix("")) if fig else ""
         if not stem:
             continue
@@ -1555,6 +1580,14 @@ def command_report(_args: argparse.Namespace) -> None:
     )
     if not figure_cards:
         figure_cards = "<p class='muted'>Run the visualize step to populate figure panels.</p>"
+
+    gene_panel_cards = "".join(
+        f"<figure><img src='../090-visualizations/{html.escape(row.get('figure_png', ''))}' alt='{html.escape(row.get('gene_id', 'gene panel'))}'><figcaption>{html.escape(row.get('gene_id', ''))} {html.escape(row.get('gene_name', ''))}</figcaption></figure>"
+        for row in gene_panels
+        if row.get("figure_png")
+    )
+    if not gene_panel_cards:
+        gene_panel_cards = "<p class='muted'>Run the visualize step after scoring to populate gene-specific RNA + ChIP panels.</p>"
 
     class_items = "".join(
         f"<div class='metric small'><span>{html.escape(r.get('integrative_class', 'unknown'))}</span><strong>{html.escape(str(r.get('n_genes', '0')))}</strong></div>"
@@ -1625,6 +1658,11 @@ def command_report(_args: argparse.Namespace) -> None:
     <section>
       <h2>Candidate Regulators</h2>
       {table_html(candidate_regulators, ["candidate_score", "gene_id", "gene_name", "integrative_class", "is_epigenetic_machinery", "machinery_group", "wgcna_hit", "mfuzz_hit", "dtu_hit", "splicing_hit"], 25)}
+    </section>
+    <section>
+      <h2>Gene-Specific RNA + ChIP Panels</h2>
+      <div class="figures">{gene_panel_cards}</div>
+      {table_html(gene_panels, ["gene_id", "gene_name", "candidate_score", "integrative_class", "figure_png"], 25)}
     </section>
     <section>
       <h2>Epigenetic Machinery Catalog</h2>

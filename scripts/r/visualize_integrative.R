@@ -66,10 +66,16 @@ trim_label <- function(x, n = 42) {
   ifelse(nchar(x) > n, paste0(substr(x, 1, n - 3), "..."), x)
 }
 
+safe_filename <- function(x) {
+  gsub("[^A-Za-z0-9_.-]+", "_", as.character(x))
+}
+
 save_plot <- function(plot, stem, width = 8, height = 5) {
   outputs <- c("png", "pdf", "svg")
   for (ext in outputs) {
+    rel <- gsub("\\\\", "/", paste0(stem, ".", ext))
     path <- file.path(outdir, paste0(stem, ".", ext))
+    dir.create(dirname(path), recursive = TRUE, showWarnings = FALSE)
     ok <- tryCatch({
       if (ext == "png") {
         png(path, width = width, height = height, units = "in", res = 160)
@@ -88,8 +94,166 @@ save_plot <- function(plot, stem, width = 8, height = 5) {
       warning(sprintf("Could not write %s: %s", basename(path), e$message))
       FALSE
     })
-    add_manifest(basename(path), if (ok) "created" else "error")
+    add_manifest(rel, if (ok) "created" else "error")
   }
+}
+
+save_gene_panel <- function(gid, width = 11, height = 10) {
+  score_row <- if ("gene_id" %in% names(candidate_scores)) candidate_scores[candidate_scores$gene_id == gid, , drop = FALSE] else data.frame(stringsAsFactors = FALSE)
+  score_row <- if (nrow(score_row) > 0) score_row[1, , drop = FALSE] else data.frame(stringsAsFactors = FALSE)
+  ev <- if ("gene_id" %in% names(gene_mark_evidence)) gene_mark_evidence[gene_mark_evidence$gene_id == gid, , drop = FALSE] else data.frame(stringsAsFactors = FALSE)
+  links_g <- if ("gene_id" %in% names(gene_mark_links)) gene_mark_links[gene_mark_links$gene_id == gid, , drop = FALSE] else data.frame(stringsAsFactors = FALSE)
+  expr <- if ("gene_id" %in% names(rna_context)) rna_context[rna_context$gene_id == gid, , drop = FALSE] else data.frame(stringsAsFactors = FALSE)
+  if (nrow(expr) == 0 && nrow(ev) > 0 && "rna_mean_TPM_in_stage" %in% names(ev)) {
+    expr <- unique(data.frame(
+      gene_id = gid,
+      stage_or_condition = safe_col(ev, "stage_or_condition", ""),
+      mean_TPM = safe_col(ev, "rna_mean_TPM_in_stage", ""),
+      mean_log2TPM = log2(as_num(safe_col(ev, "rna_mean_TPM_in_stage", 0)) + 1),
+      stringsAsFactors = FALSE
+    ))
+  }
+
+  gene_name <- if (nrow(score_row) > 0 && "gene_name" %in% names(score_row) && score_row$gene_name[[1]] != "") {
+    score_row$gene_name[[1]]
+  } else if (nrow(ev) > 0 && "gene_name" %in% names(ev) && ev$gene_name[[1]] != "") {
+    ev$gene_name[[1]]
+  } else {
+    gid
+  }
+  gene_label <- trim_label(ifelse(gene_name != gid, paste0(gene_name, " (", gid, ")"), gid), 70)
+  score <- if (nrow(score_row) > 0 && "candidate_score" %in% names(score_row)) score_row$candidate_score[[1]] else ""
+  klass <- if (nrow(score_row) > 0 && "integrative_class" %in% names(score_row)) score_row$integrative_class[[1]] else ""
+  group <- if (nrow(score_row) > 0 && "machinery_group" %in% names(score_row)) score_row$machinery_group[[1]] else ""
+  title <- paste0(gene_label, " | score=", score, " | ", klass, ifelse(group != "", paste0(" | ", group), ""))
+
+  stage_order <- c("adult", "cercariae", "miracidia", "schistosomula", "sporocysts", "all_stages", "unknown")
+  if (nrow(expr) > 0) {
+    expr$stage_or_condition <- safe_col(expr, "stage_or_condition", safe_col(expr, "context", "unknown"))
+    expr$mean_TPM <- as_num(safe_col(expr, "mean_TPM", safe_col(expr, "mean_expression", 0)))
+    expr$mean_log2TPM <- as_num(safe_col(expr, "mean_log2TPM", log2(expr$mean_TPM + 1)))
+    expr <- expr[!is.na(expr$mean_TPM), , drop = FALSE]
+    expr$stage_or_condition <- factor(expr$stage_or_condition, levels = unique(c(stage_order, expr$stage_or_condition)))
+    p_expr <- ggplot(expr, aes(x = stage_or_condition, y = mean_TPM)) +
+      geom_col(fill = "#2563eb", width = 0.7) +
+      geom_point(aes(y = mean_TPM), color = "#111827", size = 1.8) +
+      labs(title = "RNA-seq expression", x = NULL, y = "Mean TPM") +
+      theme_integrative(10) +
+      theme(axis.text.x = element_text(angle = 30, hjust = 1), legend.position = "none")
+  } else {
+    p_expr <- empty_plot("RNA-seq expression", "No expression-by-context rows for this gene.")
+  }
+
+  if (nrow(ev) > 0) {
+    ev$stage_or_condition <- factor(safe_col(ev, "stage_or_condition", "unknown"), levels = unique(c(stage_order, safe_col(ev, "stage_or_condition", "unknown"))))
+    ev$mark_or_factor <- safe_col(ev, "mark_or_factor", "unknown")
+    ev$n_peaks <- as_num(safe_col(ev, "n_peaks", 0))
+    ev$n_promoter_peaks <- as_num(safe_col(ev, "n_promoter_peaks", 0))
+    ev$promoter_fraction <- ifelse(ev$n_peaks > 0, ev$n_promoter_peaks / ev$n_peaks, 0)
+    p_chip <- ggplot(ev, aes(x = stage_or_condition, y = mark_or_factor)) +
+      geom_point(aes(size = n_peaks, fill = promoter_fraction), shape = 21, color = "#111827", alpha = 0.85) +
+      scale_fill_gradient(low = "#fef3c7", high = "#dc2626", limits = c(0, 1)) +
+      scale_size_continuous(range = c(2.5, 9), name = "Peaks") +
+      labs(title = "Linked ChIP-seq marks", x = NULL, y = "Mark", fill = "Promoter fraction") +
+      theme_integrative(10) +
+      theme(axis.text.x = element_text(angle = 30, hjust = 1))
+  } else {
+    p_chip <- empty_plot("Linked ChIP-seq marks", "No gene-mark-stage rows for this gene.")
+  }
+
+  if (nrow(links_g) > 0) {
+    links_g$stage_or_condition <- safe_col(links_g, "stage_or_condition", "unknown")
+    links_g$mark_or_factor <- safe_col(links_g, "mark_or_factor", "unknown")
+    links_g$promoter_flag <- safe_col(links_g, "promoter_flag", "false")
+    loc <- tolower(safe_col(links_g, "peak_location", ""))
+    links_g$position_class <- ifelse(
+      grepl("promoter|tss", loc) | links_g$promoter_flag == "true",
+      "promoter/TSS",
+      ifelse(
+        grepl("exon|intron|gene_body|gene body|genic", loc),
+        "gene body",
+        ifelse(grepl("distal|intergenic|upstream|downstream", loc), "distal/intergenic", "other/annotated")
+      )
+    )
+    pos_df <- aggregate(
+      peak_id ~ stage_or_condition + mark_or_factor + position_class,
+      links_g,
+      length
+    )
+    names(pos_df)[names(pos_df) == "peak_id"] <- "n_peaks"
+    pos_df$position_class <- factor(pos_df$position_class, levels = c("promoter/TSS", "gene body", "distal/intergenic", "other/annotated"))
+    p_pos <- ggplot(pos_df, aes(x = mark_or_factor, y = position_class, color = stage_or_condition)) +
+      geom_point(aes(size = n_peaks), alpha = 0.85) +
+      scale_size_continuous(range = c(2, 8), name = "Peaks") +
+      labs(title = "Peak position classes", x = "Mark", y = "Position class", color = "Stage") +
+      theme_integrative(10) +
+      theme(axis.text.x = element_text(angle = 30, hjust = 1))
+  } else {
+    p_pos <- empty_plot("Peak position classes", "No peak-level rows for this gene.")
+  }
+
+  flags <- data.frame(
+    evidence = c("Epigenetic machinery", "WGCNA", "Mfuzz", "DTU", "Splicing"),
+    present = c(
+      ifelse(nrow(score_row) > 0, safe_col(score_row, "is_epigenetic_machinery", "false")[[1]], "false"),
+      ifelse(nrow(score_row) > 0, safe_col(score_row, "wgcna_hit", "false")[[1]], "false"),
+      ifelse(nrow(score_row) > 0, safe_col(score_row, "mfuzz_hit", "false")[[1]], "false"),
+      ifelse(nrow(score_row) > 0, safe_col(score_row, "dtu_hit", "false")[[1]], "false"),
+      ifelse(nrow(score_row) > 0, safe_col(score_row, "splicing_hit", "false")[[1]], "false")
+    ),
+    stringsAsFactors = FALSE
+  )
+  flags$present <- tolower(flags$present) == "true"
+  p_flags <- ggplot(flags, aes(x = "Evidence", y = evidence, fill = present)) +
+    geom_tile(color = "white", linewidth = 0.7) +
+    geom_text(aes(label = ifelse(present, "yes", "no")), color = "#111827", size = 3.4) +
+    scale_fill_manual(values = c("FALSE" = "#e5e7eb", "TRUE" = "#16a34a"), guide = "none") +
+    labs(title = "RNA/regulatory evidence flags", x = NULL, y = NULL) +
+    theme_integrative(10) +
+    theme(axis.text.x = element_blank(), axis.text.y = element_text(size = 9), panel.grid = element_blank())
+
+  stem <- file.path("gene_panels", paste0(safe_filename(gid), "_gene_panel"))
+  rels <- character()
+  for (ext in c("png", "pdf", "svg")) {
+    rel <- gsub("\\\\", "/", paste0(stem, ".", ext))
+    path <- file.path(outdir, paste0(stem, ".", ext))
+    dir.create(dirname(path), recursive = TRUE, showWarnings = FALSE)
+    ok <- tryCatch({
+      if (ext == "png") {
+        png(path, width = width, height = height, units = "in", res = 160)
+      } else if (ext == "pdf") {
+        pdf(path, width = width, height = height)
+      } else {
+        svg(path, width = width, height = height)
+      }
+      grid::grid.newpage()
+      grid::grid.text(title, x = 0.04, y = 0.985, just = c("left", "top"), gp = grid::gpar(fontsize = 13, fontface = "bold", col = "#111827"))
+      print(p_expr, vp = grid::viewport(x = 0.06, y = 0.73, width = 0.88, height = 0.22, just = c("left", "bottom")))
+      print(p_chip, vp = grid::viewport(x = 0.06, y = 0.48, width = 0.88, height = 0.21, just = c("left", "bottom")))
+      print(p_pos, vp = grid::viewport(x = 0.06, y = 0.24, width = 0.88, height = 0.20, just = c("left", "bottom")))
+      print(p_flags, vp = grid::viewport(x = 0.06, y = 0.03, width = 0.88, height = 0.17, just = c("left", "bottom")))
+      dev.off()
+      TRUE
+    }, error = function(e) {
+      if (dev.cur() > 1) {
+        dev.off()
+      }
+      warning(sprintf("Could not write %s: %s", basename(path), e$message))
+      FALSE
+    })
+    add_manifest(rel, if (ok) "created" else "error")
+    if (ok) {
+      rels <- c(rels, rel)
+    }
+  }
+  data.frame(
+    gene_id = gid,
+    gene_name = gene_name,
+    candidate_score = score,
+    integrative_class = klass,
+    figure_png = gsub("\\\\", "/", paste0(stem, ".png")),
+    stringsAsFactors = FALSE
+  )
 }
 
 empty_plot <- function(title, message) {
@@ -124,9 +288,11 @@ class_counts <- read_tsv(file.path(project_dir, "070-integrated-tables", "integr
 candidate_scores <- read_tsv(file.path(project_dir, "080-candidate-scoring", "candidate_gene_scores.tsv"))
 catalog <- read_tsv(file.path(project_dir, "030-id-harmonization", "epigenetic_machinery_catalog.tsv"))
 chip_mark_stage <- read_tsv(file.path(project_dir, "060-chipseq-summary", "chip_mark_stage_metadata.tsv"))
+rna_context <- read_tsv(file.path(project_dir, "050-rnaseq-summary", "rna_expression_by_context.tsv"))
 gene_mark_summary <- read_tsv(file.path(project_dir, "070-integrated-tables", "gene_mark_stage_summary.tsv"))
 gene_mark_links <- read_tsv(file.path(project_dir, "070-integrated-tables", "gene_mark_stage_links.tsv"))
 stage_mark_comparison <- read_tsv(file.path(project_dir, "080-candidate-scoring", "stage_mark_comparison.tsv"))
+gene_mark_evidence <- read_tsv(file.path(project_dir, "080-candidate-scoring", "ranked_gene_mark_stage_evidence.tsv"))
 
 if (nrow(class_counts) > 0 && all(c("integrative_class", "n_genes") %in% names(class_counts))) {
   class_counts$n_genes <- as_num(class_counts$n_genes)
@@ -326,6 +492,38 @@ if (nrow(gene_mark_links) > 0) {
   p <- empty_plot("Gene-position-mark associations", "Run integration after peak-gene mapping to populate this figure.")
 }
 save_plot(p, "gene_position_mark_map", 12, 6.8)
+
+gene_panel_top_n <- suppressWarnings(as.integer(Sys.getenv("GENE_PANEL_TOP_N", "12")))
+if (is.na(gene_panel_top_n) || gene_panel_top_n < 1) {
+  gene_panel_top_n <- 12
+}
+explicit_genes <- unlist(strsplit(Sys.getenv("GENE_PANEL_GENES", ""), "[,;[:space:]]+"))
+explicit_genes <- explicit_genes[explicit_genes != ""]
+panel_genes <- character()
+if (nrow(candidate_scores) > 0 && all(c("gene_id", "candidate_score") %in% names(candidate_scores))) {
+  candidate_scores$candidate_score <- as_num(candidate_scores$candidate_score)
+  linked_ids <- unique(c(safe_col(gene_mark_links, "gene_id", ""), safe_col(gene_mark_evidence, "gene_id", "")))
+  ranked <- candidate_scores$gene_id[order(-candidate_scores$candidate_score)]
+  panel_genes <- ranked[ranked %in% linked_ids]
+}
+if (length(panel_genes) == 0 && nrow(gene_mark_evidence) > 0 && "gene_id" %in% names(gene_mark_evidence)) {
+  panel_genes <- unique(gene_mark_evidence$gene_id)
+}
+panel_genes <- unique(c(explicit_genes, head(panel_genes, gene_panel_top_n)))
+panel_genes <- panel_genes[panel_genes != ""]
+panel_index <- data.frame(gene_id = character(), gene_name = character(), candidate_score = character(), integrative_class = character(), figure_png = character(), stringsAsFactors = FALSE)
+if (length(panel_genes) > 0) {
+  for (gid in panel_genes) {
+    panel_index <- rbind(panel_index, save_gene_panel(gid))
+  }
+}
+write.table(
+  panel_index,
+  file = file.path(outdir, "gene_panel_index.tsv"),
+  sep = "\t",
+  quote = FALSE,
+  row.names = FALSE
+)
 
 workflow <- data.frame(
   xmin = c(0.05, 0.05, 0.38, 0.72),
