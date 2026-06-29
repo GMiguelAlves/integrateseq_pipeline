@@ -200,6 +200,9 @@ coordinates, relative position to the TSS when available, and RNA evidence.
 - The visualization step uses R/ggplot2. On servers that already run the
   RNA-seq pipeline, set `ENV_BACKEND=conda`, `CONDA_BASE`, and
   `VISUALIZATION_CONDA_ENV=r-analysis`.
+- If Slurm reports `Required command not found in PATH: Rscript`, point
+  `VISUALIZATION_CONDA_ENV` to the RNA-seq/R conda environment that contains
+  `Rscript`, or set `RSCRIPT_BIN` to the full `Rscript` path.
 
 ## Adapting to another organism
 

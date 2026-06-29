@@ -55,9 +55,13 @@ activate_runtime() {
     none)
       ;;
     conda)
-      if [[ -n "${CONDA_BASE:-}" && -f "${CONDA_BASE}/etc/profile.d/conda.sh" ]]; then
+      local conda_base="${CONDA_BASE:-}"
+      if [[ -z "${conda_base}" && -n "${HOME:-}" && -f "${HOME}/miniconda3/etc/profile.d/conda.sh" ]]; then
+        conda_base="${HOME}/miniconda3"
+      fi
+      if [[ -n "${conda_base}" && -f "${conda_base}/etc/profile.d/conda.sh" ]]; then
         # shellcheck disable=SC1090
-        source "${CONDA_BASE}/etc/profile.d/conda.sh"
+        source "${conda_base}/etc/profile.d/conda.sh"
         conda activate "${CONDA_ENV}"
       elif command -v conda >/dev/null 2>&1; then
         # shellcheck disable=SC1091
