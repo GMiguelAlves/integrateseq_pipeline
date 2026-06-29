@@ -21,7 +21,7 @@ environment.
 - `060-chipseq-summary/`: per-gene ChIP-seq summaries
 - `070-integrated-tables/`: integrated gene and contrast tables
 - `080-candidate-scoring/`: ranked candidate genes
-- `090-visualizations/`: PNG/PDF/SVG figures when matplotlib is available
+- `090-visualizations/`: PNG/PDF/SVG figures generated with R/ggplot2
 - `100-functional-analysis/`: offline functional summaries
 - `110-reports/`: final `integrative_report.md` and `.html`
 - `config/`: central configuration and templates
@@ -176,10 +176,16 @@ Key outputs are:
 - `060-chipseq-summary/chip_gene_summary.tsv`
 - `070-integrated-tables/integrated_gene_table.tsv`
 - `070-integrated-tables/integrated_by_contrast.tsv`
+- `070-integrated-tables/gene_mark_stage_links.tsv`
 - `080-candidate-scoring/candidate_gene_scores.tsv`
 - `080-candidate-scoring/top_candidates.tsv`
+- `090-visualizations/gene_position_mark_map.png`
 - `090-visualizations/visualization_manifest.tsv`
 - `110-reports/integrative_report.html`
+
+`gene_mark_stage_links.tsv` is the main association table for the biological
+question. It links each gene to mark/factor, stage/condition, peak ID, peak
+coordinates, relative position to the TSS when available, and RNA evidence.
 
 ## Troubleshooting
 
@@ -191,9 +197,9 @@ Key outputs are:
 - If no GTF/GFF3 is provided, `gene_master_table.tsv` is built from gene IDs
   found in RNA-seq, DEG, ChIP, functional annotation, and genes-of-interest
   files.
-- If matplotlib is unavailable, the visualization step writes a warning and a
-  manifest instead of figure files. Install matplotlib in the active runtime to
-  generate PNG/PDF/SVG outputs.
+- The visualization step uses R/ggplot2. On servers that already run the
+  RNA-seq pipeline, set `ENV_BACKEND=conda`, `CONDA_BASE`, and
+  `VISUALIZATION_CONDA_ENV=r-analysis`.
 
 ## Adapting to another organism
 

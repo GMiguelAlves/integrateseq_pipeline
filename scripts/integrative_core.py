@@ -13,6 +13,7 @@ import math
 import os
 import re
 import statistics
+import subprocess
 import sys
 from collections import Counter, defaultdict
 from pathlib import Path
@@ -873,6 +874,15 @@ def write_gene_mark_stage_tables(
         gene = gene_master.get(gid, {"gene_id": gid, "gene_name": gid})
         expr = expr_context.get((gid, stage.lower()), {})
         deg_hits = deg_by_gene.get(gid, [])
+        peak_start = link.get("start", "")
+        peak_end = link.get("end", "")
+        peak_chrom = link.get("chrom", "")
+        peak_position = ""
+        if peak_chrom and str(peak_start).strip() and str(peak_end).strip():
+            peak_position = f"{peak_chrom}:{peak_start}-{peak_end}"
+        peak_midpoint = ""
+        if str(peak_start).strip() and str(peak_end).strip():
+            peak_midpoint = str((as_int(peak_start) + as_int(peak_end)) // 2)
         status = "not_significant"
         if any(d.get("deg_status") == "up" for d in deg_hits):
             status = "up"
@@ -889,6 +899,11 @@ def write_gene_mark_stage_tables(
                 "regulatory_class": mark_row.get("regulatory_class", "unknown"),
                 "expected_effect": mark_row.get("expected_effect", "unknown"),
                 "peak_id": link.get("peak_id", ""),
+                "peak_chrom": peak_chrom,
+                "peak_start": peak_start,
+                "peak_end": peak_end,
+                "peak_midpoint": peak_midpoint,
+                "peak_position": peak_position,
                 "peak_location": link.get("genomic_annotation", ""),
                 "promoter_flag": link.get("promoter_flag", "false"),
                 "distance_to_tss": link.get("distance_to_tss", ""),
@@ -910,6 +925,11 @@ def write_gene_mark_stage_tables(
         "regulatory_class",
         "expected_effect",
         "peak_id",
+        "peak_chrom",
+        "peak_start",
+        "peak_end",
+        "peak_midpoint",
+        "peak_position",
         "peak_location",
         "promoter_flag",
         "distance_to_tss",
@@ -1098,230 +1118,21 @@ def command_score(_args: argparse.Namespace) -> None:
 
 def command_visualize(_args: argparse.Namespace) -> None:
     vis_dir = outdir("090-visualizations")
-    _h, scores = read_table(str(outdir("080-candidate-scoring") / "candidate_gene_scores.tsv"))
-    _h, classes = read_table(str(outdir("070-integrated-tables") / "integrative_class_counts.tsv"))
-    _h, mark_stage = read_table(str(outdir("060-chipseq-summary") / "chip_mark_stage_metadata.tsv"))
-    _h, gene_mark = read_table(str(outdir("070-integrated-tables") / "gene_mark_stage_summary.tsv"))
-    _h, epi_catalog = read_table(str(outdir("030-id-harmonization") / "epigenetic_machinery_catalog.tsv"))
-    manifest = []
-
-    def svg_text(x: float, y: float, text: object, size: int = 12, anchor: str = "start", weight: str = "400") -> str:
-        return (
-            f"<text x='{x}' y='{y}' font-size='{size}' font-family='Arial, Helvetica, sans-serif' "
-            f"text-anchor='{anchor}' font-weight='{weight}' fill='#111827'>{html.escape(str(text))}</text>"
-        )
-
-    def write_svg(name: str, width: int, height: int, body: str) -> None:
-        svg = (
-            f"<svg xmlns='http://www.w3.org/2000/svg' width='{width}' height='{height}' viewBox='0 0 {width} {height}'>"
-            "<rect width='100%' height='100%' fill='#ffffff'/>"
-            f"{body}</svg>\n"
-        )
-        write_text(vis_dir / f"{name}.svg", svg)
-        manifest.append({"figure": f"{name}.svg", "status": "created"})
-
-    def fallback_barh(name: str, title: str, rows: list[tuple[str, float]], color: str = "#2563eb") -> None:
-        rows = rows[:30] or [("no_data", 0)]
-        width = 900
-        height = max(260, 70 + len(rows) * 24)
-        left = 220
-        max_value = max([v for _label, v in rows] or [1]) or 1
-        parts = [svg_text(width / 2, 32, title, 18, "middle", "700")]
-        for i, (label, value) in enumerate(rows):
-            y = 60 + i * 24
-            bar_width = int((width - left - 80) * (value / max_value))
-            parts.append(svg_text(12, y + 14, label[:34], 11))
-            parts.append(f"<rect x='{left}' y='{y}' width='{bar_width}' height='16' fill='{color}' rx='2'/>")
-            parts.append(svg_text(left + bar_width + 8, y + 13, f"{value:g}", 11))
-        write_svg(name, width, height, "".join(parts))
-
-    def fallback_matrix(name: str, title: str, rows: list[str], cols: list[str], values: list[list[int]], empty_message: str) -> None:
-        width = max(720, 180 + len(cols) * 120)
-        height = max(280, 95 + len(rows) * 38)
-        parts = [svg_text(width / 2, 32, title, 18, "middle", "700")]
-        if not rows or not cols:
-            parts.append(svg_text(width / 2, height / 2, empty_message, 16, "middle", "700"))
-            write_svg(name, width, height, "".join(parts))
-            return
-        max_value = max([max(row) for row in values] or [1]) or 1
-        left = 170
-        top = 72
-        cell_w = 105
-        cell_h = 30
-        for j, col in enumerate(cols):
-            parts.append(svg_text(left + j * cell_w + cell_w / 2, top - 12, col, 10, "middle", "700"))
-        for i, row_label in enumerate(rows):
-            y = top + i * cell_h
-            parts.append(svg_text(12, y + 20, row_label, 10))
-            for j, _col in enumerate(cols):
-                value = values[i][j]
-                alpha = 0.15 + 0.75 * (value / max_value)
-                x = left + j * cell_w
-                parts.append(f"<rect x='{x}' y='{y}' width='{cell_w - 4}' height='{cell_h - 4}' fill='#0891b2' fill-opacity='{alpha:.3f}'/>")
-                parts.append(svg_text(x + cell_w / 2 - 2, y + 18, value, 11, "middle", "700"))
-        write_svg(name, width, height, "".join(parts))
-
-    def generate_fallback_svgs(reason: Exception) -> None:
-        write_text(vis_dir / "visualization_warning.txt", f"Matplotlib unavailable; generated SVG fallback figures. Reason: {reason}\n")
-        class_rows = [(r.get("integrative_class", "unknown"), float(as_int(r.get("n_genes", "0")))) for r in classes]
-        fallback_barh("barplot_integrative_classes", "Integrative classes", class_rows, "#2563eb")
-        top_rows = [(r.get("gene_id", ""), as_float(r.get("candidate_score"))) for r in scores[:30]]
-        fallback_barh("top_candidate_scores", "Top candidate genes", top_rows, "#16a34a")
-        group_counts = Counter(r.get("machinery_group", "unknown") for r in epi_catalog)
-        fallback_barh("epigenetic_catalog_groups", "Epigenetic machinery catalog", [(k, float(v)) for k, v in group_counts.items()], "#0f766e")
-        marks = sorted({r.get("mark_or_factor", "unknown") for r in mark_stage})
-        stages = sorted({r.get("stage_or_condition", "unknown") for r in mark_stage})
-        mark_idx = {m: i for i, m in enumerate(marks)}
-        stage_idx = {s: i for i, s in enumerate(stages)}
-        matrix = [[0 for _ in stages] for _ in marks]
-        for row in mark_stage:
-            if row.get("mark_or_factor") in mark_idx and row.get("stage_or_condition") in stage_idx:
-                matrix[mark_idx[row["mark_or_factor"]]][stage_idx[row["stage_or_condition"]]] = as_int(row.get("n_samples", "0"))
-        fallback_matrix("chip_mark_stage_matrix", "ChIP-seq marks by life-cycle stage", marks, stages, matrix, "No ChIP metadata available")
-        relation_counts = Counter((r.get("mark_or_factor", "unknown"), r.get("stage_or_condition", "unknown")) for r in gene_mark)
-        rel_marks = sorted({m for m, _s in relation_counts})
-        rel_stages = sorted({s for _m, s in relation_counts})
-        rel_matrix = [[relation_counts[(m, s)] for s in rel_stages] for m in rel_marks]
-        fallback_matrix("gene_mark_stage_matrix", "Gene-mark-stage links", rel_marks, rel_stages, rel_matrix, "No gene-mark-stage links yet")
-        workflow = (
-            svg_text(450, 34, "Integrative analysis workflow", 18, "middle", "700")
-            + "<rect x='45' y='80' width='180' height='70' rx='8' fill='#dbeafe' stroke='#334155'/>"
-            + "<rect x='45' y='210' width='180' height='70' rx='8' fill='#dcfce7' stroke='#334155'/>"
-            + "<rect x='360' y='145' width='190' height='80' rx='8' fill='#fef3c7' stroke='#334155'/>"
-            + "<rect x='680' y='145' width='180' height='80' rx='8' fill='#ede9fe' stroke='#334155'/>"
-            + svg_text(135, 110, "RNA-seq", 15, "middle", "700")
-            + svg_text(135, 132, "expression + DEG", 11, "middle")
-            + svg_text(135, 240, "ChIP-seq", 15, "middle", "700")
-            + svg_text(135, 262, "marks + peaks", 11, "middle")
-            + svg_text(455, 176, "Integration", 15, "middle", "700")
-            + svg_text(455, 199, "gene x mark x stage", 11, "middle")
-            + svg_text(770, 176, "Outputs", 15, "middle", "700")
-            + svg_text(770, 199, "HTML + figures", 11, "middle")
-            + "<path d='M225 115 L360 175' stroke='#334155' stroke-width='2' marker-end='url(#arrow)'/>"
-            + "<path d='M225 245 L360 195' stroke='#334155' stroke-width='2' marker-end='url(#arrow)'/>"
-            + "<path d='M550 185 L680 185' stroke='#334155' stroke-width='2' marker-end='url(#arrow)'/>"
-            + "<defs><marker id='arrow' markerWidth='10' markerHeight='10' refX='9' refY='3' orient='auto' markerUnits='strokeWidth'><path d='M0,0 L0,6 L9,3 z' fill='#334155'/></marker></defs>"
-        )
-        write_svg("integrative_workflow_overview", 900, 330, workflow)
-
-    try:
-        import matplotlib
-
-        matplotlib.use("Agg")
-        import matplotlib.pyplot as plt
-        from matplotlib.patches import FancyBboxPatch
-
-        def save_all(fig, stem: str, svg: bool = True) -> None:
-            exts = ["png", "pdf"] + (["svg"] if svg else [])
-            for ext in exts:
-                fig.savefig(vis_dir / f"{stem}.{ext}", bbox_inches="tight")
-                manifest.append({"figure": f"{stem}.{ext}", "status": "created"})
-            plt.close(fig)
-
-        labels = [r["integrative_class"] for r in classes] or ["no_data"]
-        values = [as_int(r.get("n_genes", "0")) for r in classes] or [0]
-        fig, ax = plt.subplots(figsize=(8, 4.5))
-        ax.bar(labels, values, color=["#2563eb", "#16a34a", "#f59e0b", "#dc2626", "#7c3aed"][: len(labels)])
-        ax.set_ylabel("Genes")
-        ax.set_title("Integrative classes")
-        ax.tick_params(axis="x", labelrotation=30)
-        save_all(fig, "barplot_integrative_classes")
-
-        top = scores[: min(30, len(scores))]
-        fig, ax = plt.subplots(figsize=(8, max(4, len(top) * 0.25)))
-        ax.barh([r.get("gene_id", "") for r in reversed(top)], [as_float(r.get("candidate_score")) for r in reversed(top)], color="#16a34a")
-        ax.set_xlabel("Candidate score")
-        ax.set_title("Top candidate genes")
-        save_all(fig, "top_candidate_scores")
-
-        group_counts = Counter(r.get("machinery_group", "unknown") for r in epi_catalog)
-        fig, ax = plt.subplots(figsize=(8, max(4, len(group_counts) * 0.35)))
-        groups = list(group_counts.keys()) or ["no_catalog"]
-        counts = [group_counts[g] for g in groups] or [0]
-        ax.barh(list(reversed(groups)), list(reversed(counts)), color="#0f766e")
-        ax.set_xlabel("Genes")
-        ax.set_title("Epigenetic machinery catalog")
-        save_all(fig, "epigenetic_catalog_groups")
-
-        marks = sorted({r.get("mark_or_factor", "unknown") for r in mark_stage})
-        stages = sorted({r.get("stage_or_condition", "unknown") for r in mark_stage})
-        matrix = [[0 for _ in stages] for _ in marks]
-        mark_index = {m: i for i, m in enumerate(marks)}
-        stage_index = {s: i for i, s in enumerate(stages)}
-        for row in mark_stage:
-            if row.get("mark_or_factor") in mark_index and row.get("stage_or_condition") in stage_index:
-                matrix[mark_index[row["mark_or_factor"]]][stage_index[row["stage_or_condition"]]] = as_int(row.get("n_samples", "0"))
-        fig, ax = plt.subplots(figsize=(max(6, len(stages) * 1.1), max(4, len(marks) * 0.55)))
-        im = ax.imshow(matrix or [[0]], cmap="YlGnBu")
-        ax.set_xticks(range(len(stages)))
-        ax.set_xticklabels(stages, rotation=30, ha="right")
-        ax.set_yticks(range(len(marks)))
-        ax.set_yticklabels(marks)
-        for i, mark in enumerate(marks):
-            for j, _stage in enumerate(stages):
-                ax.text(j, i, str(matrix[i][j]), ha="center", va="center", color="#111827")
-        ax.set_title("ChIP-seq marks by life-cycle stage")
-        fig.colorbar(im, ax=ax, label="Samples")
-        save_all(fig, "chip_mark_stage_matrix")
-
-        relation_counts = Counter((r.get("mark_or_factor", "unknown"), r.get("stage_or_condition", "unknown")) for r in gene_mark)
-        rel_marks = sorted({m for m, _s in relation_counts})
-        rel_stages = sorted({s for _m, s in relation_counts})
-        fig, ax = plt.subplots(figsize=(max(6, len(rel_stages) * 1.1), max(4, len(rel_marks) * 0.55)))
-        if relation_counts:
-            rel_matrix = [[relation_counts[(m, s)] for s in rel_stages] for m in rel_marks]
-            im = ax.imshow(rel_matrix, cmap="PuBuGn")
-            ax.set_xticks(range(len(rel_stages)))
-            ax.set_xticklabels(rel_stages, rotation=30, ha="right")
-            ax.set_yticks(range(len(rel_marks)))
-            ax.set_yticklabels(rel_marks)
-            for i, _mark in enumerate(rel_marks):
-                for j, _stage in enumerate(rel_stages):
-                    ax.text(j, i, str(rel_matrix[i][j]), ha="center", va="center", color="#111827")
-            fig.colorbar(im, ax=ax, label="Linked genes")
-        else:
-            ax.text(
-                0.5,
-                0.55,
-                "Awaiting server-side ChIP peak annotations",
-                ha="center",
-                va="center",
-                fontsize=14,
-                fontweight="bold",
-            )
-            ax.text(
-                0.5,
-                0.42,
-                "Run on the HPC outputs to populate gene-mark-stage links.",
-                ha="center",
-                va="center",
-                fontsize=10,
-            )
-            ax.set_axis_off()
-        ax.set_title("Gene-mark-stage links")
-        save_all(fig, "gene_mark_stage_matrix")
-
-        fig, ax = plt.subplots(figsize=(10, 4.8))
-        ax.set_axis_off()
-        boxes = [
-            (0.04, 0.58, "RNA-seq", "TPM/counts, DEG,\nWGCNA/Mfuzz evidence", "#dbeafe"),
-            (0.04, 0.16, "ChIP-seq", "Metadata, peaks,\npeak-gene links", "#dcfce7"),
-            (0.38, 0.36, "Integration", "gene x mark x stage\nexpression + chromatin", "#fef3c7"),
-            (0.72, 0.36, "Outputs", "candidate genes,\nHTML report, figures", "#ede9fe"),
-        ]
-        for x, y, title, body, color in boxes:
-            patch = FancyBboxPatch((x, y), 0.23, 0.25, boxstyle="round,pad=0.02,rounding_size=0.02", fc=color, ec="#374151", lw=1.2)
-            ax.add_patch(patch)
-            ax.text(x + 0.115, y + 0.17, title, ha="center", va="center", fontsize=13, fontweight="bold")
-            ax.text(x + 0.115, y + 0.08, body, ha="center", va="center", fontsize=9)
-        for y in [0.705, 0.285]:
-            ax.annotate("", xy=(0.38, 0.485), xytext=(0.27, y), arrowprops=dict(arrowstyle="->", lw=1.6, color="#374151"))
-        ax.annotate("", xy=(0.72, 0.485), xytext=(0.61, 0.485), arrowprops=dict(arrowstyle="->", lw=1.6, color="#374151"))
-        ax.set_title("Integrative analysis workflow", fontsize=15, fontweight="bold")
-        save_all(fig, "integrative_workflow_overview")
-    except Exception as exc:  # pragma: no cover - depends on local plotting stack
-        generate_fallback_svgs(exc)
-    write_table(vis_dir / "visualization_manifest.tsv", manifest, ["figure", "status"])
+    script = Path(__file__).resolve().parent / "r" / "visualize_integrative.R"
+    if not script.is_file():
+        raise SystemExit(f"Visualization script not found: {script}")
+    rscript = env("RSCRIPT_BIN", "Rscript") or "Rscript"
+    subprocess.run(
+        [
+            rscript,
+            str(script),
+            "--project-dir",
+            str(Path(env("INTEGRATION_OUTPUT_DIR", env("PROJECT_DIR", "."))).resolve()),
+            "--outdir",
+            str(vis_dir.resolve()),
+        ],
+        check=True,
+    )
 
 
 def command_functional(_args: argparse.Namespace) -> None:

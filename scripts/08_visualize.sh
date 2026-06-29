@@ -17,5 +17,9 @@ if is_done "${STEP_DIR}" "visualize"; then
   exit 0
 fi
 
-run_python_step visualize
+activate_runtime
+require_cmd "${RSCRIPT_BIN}"
+"${RSCRIPT_BIN}" "${SCRIPT_DIR}/r/visualize_integrative.R" \
+  --project-dir "${INTEGRATION_OUTPUT_DIR}" \
+  --outdir "${INTEGRATION_OUTPUT_DIR}/${STEP_DIR}"
 mark_done "${STEP_DIR}" "visualize"
