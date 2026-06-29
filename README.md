@@ -210,6 +210,8 @@ The visualization step also creates gene-specific RNA + ChIP panels for the
 top `GENE_PANEL_TOP_N` linked candidates. Set `GENE_PANEL_GENES` to a
 comma-separated list of gene IDs to force specific genes into this panel set.
 Set `GENE_PANEL_TOP_N=0` to skip those per-gene panels during quick test runs.
+Use `GENE_PANEL_WIDTH` and `GENE_PANEL_HEIGHT` to make the generated panels
+larger when preparing final figures.
 In those panels, detailed RNA contexts are collapsed to canonical life-cycle
 stages so expression, ChIP mark, and peak-position evidence can be compared in
 one readable view.

@@ -194,7 +194,28 @@ save_plot <- function(plot, stem, width = 8, height = 5) {
   }
 }
 
-save_gene_panel <- function(gid, width = 11, height = 10) {
+save_gene_panel <- function(gid, width = 13.5, height = 12.5) {
+  env_width <- suppressWarnings(as.numeric(Sys.getenv("GENE_PANEL_WIDTH", "")))
+  env_height <- suppressWarnings(as.numeric(Sys.getenv("GENE_PANEL_HEIGHT", "")))
+  if (!is.na(env_width) && env_width > 0) {
+    width <- env_width
+  }
+  if (!is.na(env_height) && env_height > 0) {
+    height <- env_height
+  }
+
+  panel_theme <- theme(
+    plot.title = element_text(size = 11, margin = margin(b = 6)),
+    axis.title = element_text(size = 9),
+    axis.text = element_text(size = 8),
+    legend.position = "right",
+    legend.box = "vertical",
+    legend.title = element_text(size = 8),
+    legend.text = element_text(size = 7),
+    legend.key.size = grid::unit(0.34, "cm"),
+    plot.margin = margin(5, 8, 5, 5)
+  )
+
   score_row <- if ("gene_id" %in% names(candidate_scores)) candidate_scores[candidate_scores$gene_id == gid, , drop = FALSE] else data.frame(stringsAsFactors = FALSE)
   score_row <- if (nrow(score_row) > 0) score_row[1, , drop = FALSE] else data.frame(stringsAsFactors = FALSE)
   ev <- if ("gene_id" %in% names(gene_mark_evidence)) gene_mark_evidence[gene_mark_evidence$gene_id == gid, , drop = FALSE] else data.frame(stringsAsFactors = FALSE)
@@ -231,7 +252,8 @@ save_gene_panel <- function(gid, width = 11, height = 10) {
         geom_point(aes(y = mean_TPM), color = "#111827", size = 1.8) +
         labs(title = "RNA-seq expression by life-cycle stage", x = NULL, y = "Mean TPM") +
         theme_integrative(10) +
-        theme(axis.text.x = element_text(angle = 30, hjust = 1), legend.position = "none")
+        panel_theme +
+        theme(axis.text.x = element_text(angle = 25, hjust = 1), legend.position = "none")
     } else {
       p_expr <- empty_plot("RNA-seq expression by life-cycle stage", "No numeric RNA-seq expression rows for this gene.")
     }
@@ -251,7 +273,8 @@ save_gene_panel <- function(gid, width = 11, height = 10) {
       scale_size_continuous(range = c(2.5, 9), name = "Peaks") +
       labs(title = "Linked ChIP-seq marks", x = NULL, y = "Mark", fill = "Promoter fraction") +
       theme_integrative(10) +
-      theme(axis.text.x = element_text(angle = 30, hjust = 1))
+      panel_theme +
+      theme(axis.text.x = element_text(angle = 25, hjust = 1))
   } else {
     p_chip <- empty_plot("Linked ChIP-seq marks", "No gene-mark-stage rows for this gene.")
   }
@@ -283,7 +306,8 @@ save_gene_panel <- function(gid, width = 11, height = 10) {
       scale_size_continuous(range = c(2, 8), name = "Peaks") +
       labs(title = "Peak position classes", x = "Mark", y = "Position class", color = "Stage") +
       theme_integrative(10) +
-      theme(axis.text.x = element_text(angle = 30, hjust = 1))
+      panel_theme +
+      theme(axis.text.x = element_text(angle = 25, hjust = 1))
   } else {
     p_pos <- empty_plot("Peak position classes", "No peak-level rows for this gene.")
   }
@@ -306,7 +330,8 @@ save_gene_panel <- function(gid, width = 11, height = 10) {
     scale_fill_manual(values = c("FALSE" = "#e5e7eb", "TRUE" = "#16a34a"), guide = "none") +
     labs(title = "RNA/regulatory evidence flags", x = NULL, y = NULL) +
     theme_integrative(10) +
-    theme(axis.text.x = element_blank(), axis.text.y = element_text(size = 9), panel.grid = element_blank())
+    panel_theme +
+    theme(axis.text.x = element_blank(), axis.text.y = element_text(size = 8.5), panel.grid = element_blank(), legend.position = "none")
 
   stem <- file.path("gene_panels", paste0(safe_filename(gid), "_gene_panel"))
   rels <- character()
@@ -323,11 +348,11 @@ save_gene_panel <- function(gid, width = 11, height = 10) {
         svg(path, width = width, height = height)
       }
       grid::grid.newpage()
-      grid::grid.text(title, x = 0.04, y = 0.985, just = c("left", "top"), gp = grid::gpar(fontsize = 13, fontface = "bold", col = "#111827"))
-      print(p_expr, vp = grid::viewport(x = 0.06, y = 0.73, width = 0.88, height = 0.22, just = c("left", "bottom")))
-      print(p_chip, vp = grid::viewport(x = 0.06, y = 0.48, width = 0.88, height = 0.21, just = c("left", "bottom")))
-      print(p_pos, vp = grid::viewport(x = 0.06, y = 0.24, width = 0.88, height = 0.20, just = c("left", "bottom")))
-      print(p_flags, vp = grid::viewport(x = 0.06, y = 0.03, width = 0.88, height = 0.17, just = c("left", "bottom")))
+      grid::grid.text(title, x = 0.035, y = 0.988, just = c("left", "top"), gp = grid::gpar(fontsize = 13, fontface = "bold", col = "#111827"))
+      print(p_expr, vp = grid::viewport(x = 0.05, y = 0.755, width = 0.91, height = 0.205, just = c("left", "bottom")))
+      print(p_chip, vp = grid::viewport(x = 0.05, y = 0.515, width = 0.91, height = 0.205, just = c("left", "bottom")))
+      print(p_pos, vp = grid::viewport(x = 0.05, y = 0.275, width = 0.91, height = 0.205, just = c("left", "bottom")))
+      print(p_flags, vp = grid::viewport(x = 0.05, y = 0.055, width = 0.91, height = 0.165, just = c("left", "bottom")))
       dev.off()
       TRUE
     }, error = function(e) {
