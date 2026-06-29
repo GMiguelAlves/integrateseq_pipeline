@@ -120,6 +120,8 @@ STAGE_ALIASES = {
     "adults": "adult",
     "cercaria": "cercariae",
     "cercariae": "cercariae",
+    "egg": "eggs",
+    "eggs": "eggs",
     "miracidium": "miracidia",
     "miracidia": "miracidia",
     "schistosomulum": "schistosomula",
@@ -367,6 +369,8 @@ def metadata_sample_keys(header: list[str], row: dict[str, str], sample_col: str
             keys.append(value)
     for col in header:
         lower = col.lower()
+        if any(token in lower for token in ["study", "project", "dataset", "bioproject"]):
+            continue
         if any(token in lower for token in ["sample", "run", "accession", "biosample", "experiment", "library", "file_prefix", "filename"]):
             value = row.get(col, "")
             if value:
@@ -397,6 +401,9 @@ def sample_aliases(value: str) -> set[str]:
             re.sub(r"[_-]rep[0-9]+$", "", item, flags=re.IGNORECASE),
             re.sub(r"[_-](counts|tpm|cpm|quant)$", "", item, flags=re.IGNORECASE),
         }
+        if "__" in item:
+            variants.add(item.split("__")[-1])
+        variants.add(re.sub(r"^[A-Z]{2,}J[EA-Z0-9]+__", "", item))
         for variant in variants:
             variant = str(variant).strip()
             if variant:
@@ -432,6 +439,8 @@ def resolve_sample_group(sample: str, groups: dict[str, str]) -> tuple[str, str,
             return groups[alias], "metadata", alias
     sample_text = str(sample or "")
     for key, group in groups.items():
+        if re.match(r"^(PRJ|SRP|ERP|DRP)[A-Z0-9]+$", key, flags=re.IGNORECASE):
+            continue
         if len(key) >= 5 and (key in sample_text or sample_text in key):
             return group, "metadata_substring", key
     inferred = canonical_stage(sample_text)

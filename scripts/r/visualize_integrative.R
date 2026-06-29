@@ -70,7 +70,7 @@ safe_filename <- function(x) {
   gsub("[^A-Za-z0-9_.-]+", "_", as.character(x))
 }
 
-stage_order <- c("adult", "cercariae", "miracidia", "schistosomula", "sporocysts", "all_stages", "unknown")
+stage_order <- c("adult", "eggs", "cercariae", "miracidia", "schistosomula", "sporocysts", "all_stages", "unknown")
 
 clean_text <- function(x, default = "unknown") {
   if (length(x) == 0) {
@@ -97,6 +97,9 @@ canonical_stage_one <- function(x) {
   }
   if (any(grepl("adult", tokens))) {
     return("adult")
+  }
+  if (any(grepl("egg", tokens))) {
+    return("eggs")
   }
   if (any(grepl("cercar", tokens))) {
     return("cercariae")
