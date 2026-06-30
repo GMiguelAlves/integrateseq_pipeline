@@ -225,6 +225,11 @@ STAGE_ALIASES = {
 }
 STAGE_ORDER = ["adult", "eggs", "cercariae", "miracidia", "schistosomula", "sporocysts", "all_stages", "unknown"]
 _KNOWN_MARKS_CACHE = None
+MARK_ALIASES = [
+    (re.compile(r"(^|[^A-Za-z0-9])(?:sm[-_ ]?)?hp1([^A-Za-z0-9]|$)", re.IGNORECASE), "SmHP1"),
+    (re.compile(r"(^|[^A-Za-z0-9])smp[-_]?179650([^A-Za-z0-9]|$)", re.IGNORECASE), "SmHP1"),
+    (re.compile(r"(^|[^A-Za-z0-9])(?:sm[-_ ]?)?cbx([^A-Za-z0-9]|$)", re.IGNORECASE), "SmHP1"),
+]
 
 
 def glob_existing(pattern: str) -> list[str]:
@@ -275,7 +280,7 @@ def known_marks() -> list[str]:
     global _KNOWN_MARKS_CACHE
     if _KNOWN_MARKS_CACHE is not None:
         return _KNOWN_MARKS_CACHE
-    marks = ["H3K27ac", "H3K4me3", "H3K27me3", "H3K9me3", "H3K9ac", "ATAC", "unknown_ChIP"]
+    marks = ["SmHP1", "H3K27ac", "H3K4me3", "H3K27me3", "H3K9me3", "H3K9ac", "ATAC", "unknown_ChIP"]
     marks.extend(load_mark_config().keys() if "load_mark_config" in globals() else [])
     _KNOWN_MARKS_CACHE = sorted({m for m in marks if m and m != "unknown"}, key=len, reverse=True)
     return _KNOWN_MARKS_CACHE
@@ -285,6 +290,9 @@ def canonical_mark(value: str) -> str:
     text = str(value or "").strip()
     if not text:
         return ""
+    for pattern, mark in MARK_ALIASES:
+        if pattern.search(text):
+            return mark
     for mark in known_marks():
         if re.search(rf"(^|[^A-Za-z0-9]){re.escape(mark)}([^A-Za-z0-9]|$)", text, flags=re.IGNORECASE):
             return mark

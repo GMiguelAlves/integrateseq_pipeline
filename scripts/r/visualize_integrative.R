@@ -128,7 +128,12 @@ stage_factor <- function(x) {
 canonical_mark_one <- function(x) {
   y <- clean_text(x, "unknown")
   lower <- tolower(y)
-  known_marks <- c("H3K27me3", "H3K4me3", "H3K9ac", "H3K9me3")
+  if (grepl("(^|[^a-z0-9])(sm[-_ ]?)?hp1([^a-z0-9]|$)", lower) ||
+      grepl("(^|[^a-z0-9])smp[-_]?179650([^a-z0-9]|$)", lower) ||
+      grepl("(^|[^a-z0-9])(sm[-_ ]?)?cbx([^a-z0-9]|$)", lower)) {
+    return("SmHP1")
+  }
+  known_marks <- c("SmHP1", "H3K27me3", "H3K4me3", "H3K9ac", "H3K9me3")
   for (mark in known_marks) {
     if (grepl(tolower(mark), lower, fixed = TRUE)) {
       return(mark)

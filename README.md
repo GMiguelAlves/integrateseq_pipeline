@@ -76,6 +76,37 @@ The default ChIP-seq outputs expected from the inspected pipeline are:
 ChIP-seq files can be absent during early development. Validation reports this
 as a warning, and RNA-only integration outputs can still be generated.
 
+### Adding PRJNA1090249 SmHP1 ChIPmentation
+
+To add the SmHP1/HP1 data from PRJNA1090249 to a project that already contains
+SRP034587 outputs, process PRJNA1090249 with the same genome build and ChIP-seq
+workflow used for the current integration. The important point is to carry a
+sample metadata table into the integration step with explicit factor labels:
+
+```text
+sample_id	mark_or_factor	condition	replicate	bioproject
+<run_or_sample>	SmHP1	cercariae	1	PRJNA1090249
+<run_or_sample>	SmHP1	sporocysts	1	PRJNA1090249
+```
+
+Recommended order:
+
+1. Download the PRJNA1090249 SRA run table and FASTQ files on the Slurm server.
+2. Process those FASTQs through the ChIP/ChIPmentation workflow: QC/trimming,
+   alignment to the same S. mansoni genome, duplicate handling, peak calling,
+   consensus/count generation, differential binding, and peak annotation.
+3. Add the annotated peak tables, BEDs, count matrices, and differential binding
+   table to the existing ChIP result globs in `config/pipeline_config.local.sh`.
+4. Set `CHIP_METADATA_FILE` to the table containing `mark_or_factor=SmHP1` and
+   `condition=cercariae` or `sporocysts`.
+5. Re-run the integration from `validate` onward, using `--force` for completed
+   steps that need to be regenerated.
+
+The pipeline now canonicalizes `HP1`, `SmHP1`, `Sm-HP1`, `CBX`, and
+`Smp_179650` as `SmHP1`. Any remaining `unknown_ChIP` labels after re-running
+usually mean that a ChIP file or metadata row still lacks a recognizable
+mark/factor label.
+
 ## Running
 
 Dry-run the full workflow:
